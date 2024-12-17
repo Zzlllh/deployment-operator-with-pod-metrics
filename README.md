@@ -1,5 +1,5 @@
 # metrics-dep-operator
-// TODO(user): Add simple overview of use/purpose
+operator edit deployment that depends on pod metrics
 
 ## Description
 // TODO(user): An in-depth paragraph about your project and overview of use
