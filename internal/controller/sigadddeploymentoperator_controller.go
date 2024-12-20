@@ -98,9 +98,11 @@ func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req 
 	}
 	// Filter deployments containing "sigen" in name
 	for _, deployment := range deployments.Items {
+		log.Info("Checking deployment", "name", deployment.Name)
 		if !strings.Contains(strings.ToLower(deployment.Name), "sigen") {
 			continue
 		}
+		log.Info("Passed deployment", "name", deployment.Name)
 
 		// Get pods for this deployment
 		var podList corev1.PodList
@@ -133,7 +135,9 @@ func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req 
 				memoryQuantity := container.Usage.Memory()
 				memoryBytes := float64(memoryQuantity.Value())
 				memoryGB := memoryBytes / (1024 * 1024 * 1024) // Convert to GB
-
+				log.Info("Container memory usage",
+					"container", container.Name,
+					"memory_gb", memoryGB)
 				if memoryGB > 1.0 {
 					log.Info("Found container using more than 1GB memory",
 						"deployment", deployment.Name,
