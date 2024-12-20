@@ -19,9 +19,12 @@ package controller
 import (
 	"context"
 	"github.com/prometheus/client_golang/prometheus"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"strings"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -68,75 +71,95 @@ type SigAddDeploymentOperatorReconciler struct {
 
 func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
+
 	SigDepOperator := &sigDepOpv1alpha1.SigAddDeploymentOperator{}
 	err := r.Get(ctx, req.NamespacedName, SigDepOperator)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// If the custom resource is not found then it usually means that it was deleted or not created
 			// In this way, we will stop the reconciliation
-			log.Info("memcached resource not found. Ignoring since object must be deleted")
+			log.Info("SigAddDeploymentOperator resource not found. Ignoring since object must be deleted")
 			return ctrl.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
-		log.Error(err, "Failed to get memcached")
+		log.Error(err, "Failed to get SigAddDeploymentOperator")
 		return ctrl.Result{}, err
 	}
 
-	var podList corev1.PodList
-	if err := r.List(ctx, &podList); err != nil {
-		log.Error(err, "unable to list pods")
-		return ctrl.Result{RequeueAfter: time.Minute}, err
+	if !SigDepOperator.Spec.Enable {
+		log.Info("Operator is disabled, skipping reconciliation")
+		return reconcile.Result{}, nil // Return without error as this is intended
 	}
-	// Get metrics for each pod
-	for _, pod := range podList.Items {
-		// Skip pods that aren't running
-		if pod.Status.Phase != corev1.PodRunning {
+
+	var deployments appsv1.DeploymentList
+	if err := r.List(ctx, &deployments); err != nil {
+		log.Error(err, "unable to list deployments")
+		return reconcile.Result{RequeueAfter: time.Minute}, err
+	}
+	// Filter deployments containing "sigen" in name
+	for _, deployment := range deployments.Items {
+		if !strings.Contains(strings.ToLower(deployment.Name), "sigen") {
 			continue
 		}
 
-		// Get pod metrics
-		podMetrics, err := r.MetricsClient.MetricsV1beta1().
-			PodMetricses(pod.Namespace).
-			Get(ctx, pod.Name, metav1.GetOptions{})
-		if err != nil {
-			log.Error(err, "unable to get pod metrics",
-				"namespace", pod.Namespace,
-				"pod", pod.Name)
+		// Get pods for this deployment
+		var podList corev1.PodList
+		if err := r.List(ctx, &podList, client.MatchingLabels(deployment.Spec.Selector.MatchLabels)); err != nil {
+			log.Error(err, "unable to list pods for deployment",
+				"deployment", deployment.Name)
 			continue
 		}
 
-		// Process container metrics
-		for _, container := range podMetrics.Containers {
-			// CPU usage
-			cpuQuantity := container.Usage.Cpu()
-			cpuCores := float64(cpuQuantity.MilliValue()) / 1000.0
-			log.Info("Pod CPU metrics",
-				"namespace", pod.Namespace,
-				"pod", pod.Name,
-				"container", container.Name,
-				"cpu_millicores", cpuQuantity.MilliValue(),
-				"cpu_cores", cpuCores)
-			r.podCPUUsage.WithLabelValues(
-				pod.Namespace,
-				pod.Name,
-			).Set(cpuCores)
+		// Check each pod's metrics
+		for _, pod := range podList.Items {
+			// Skip pods that aren't running
+			if pod.Status.Phase != corev1.PodRunning {
+				continue
+			}
 
-			// Memory usage
-			memoryQuantity := container.Usage.Memory()
-			memoryBytes := float64(memoryQuantity.Value())
-			log.Info("Pod memory metrics",
-				"namespace", pod.Namespace,
-				"pod", pod.Name,
-				"container", container.Name,
-				"memory_bytes", memoryBytes,
-				"memory_Mi", memoryBytes/1024/1024)
-			r.podMemoryUsage.WithLabelValues(
-				pod.Namespace,
-				pod.Name,
-			).Set(memoryBytes)
+			// Get pod metrics
+			podMetrics, err := r.MetricsClient.MetricsV1beta1().
+				PodMetricses(pod.Namespace).
+				Get(ctx, pod.Name, metav1.GetOptions{})
+			if err != nil {
+				log.Error(err, "unable to get pod metrics",
+					"namespace", pod.Namespace,
+					"pod", pod.Name)
+				continue
+			}
+
+			// Check each container's memory usage
+			for _, container := range podMetrics.Containers {
+				memoryQuantity := container.Usage.Memory()
+				memoryBytes := float64(memoryQuantity.Value())
+				memoryGB := memoryBytes / (1024 * 1024 * 1024) // Convert to GB
+
+				if memoryGB > 1.0 {
+					log.Info("Found container using more than 1GB memory",
+						"deployment", deployment.Name,
+						"namespace", pod.Namespace,
+						"pod", pod.Name,
+						"container", container.Name,
+						"memory_bytes", memoryBytes,
+						"memory_GB", memoryGB)
+
+					// Record metrics
+					r.podMemoryUsage.WithLabelValues(
+						pod.Namespace,
+						pod.Name,
+					).Set(memoryBytes)
+
+					// CPU metrics for context
+					cpuQuantity := container.Usage.Cpu()
+					cpuCores := float64(cpuQuantity.MilliValue()) / 1000.0
+					r.podCPUUsage.WithLabelValues(
+						pod.Namespace,
+						pod.Name,
+					).Set(cpuCores)
+				}
+			}
 		}
 	}
-
 	// Requeue after interval
 	return reconcile.Result{RequeueAfter: time.Minute}, nil
 }

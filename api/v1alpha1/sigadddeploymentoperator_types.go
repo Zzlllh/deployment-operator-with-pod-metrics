@@ -54,7 +54,7 @@ type SigAddDeploymentOperatorSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	Enable          string `json:"enable,omitempty"`
+	Enable          bool   `json:"enable,omitempty"`
 	MemoryThreshold string `json:"memoryThreshold,omitempty"`
 }
 
