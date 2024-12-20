@@ -8,10 +8,13 @@ layout:
 projectName: metrics-dep-operator
 repo: github.com/Zzlllh/deployment-operator-with-pod-metrics
 resources:
-- controller: true
-  core: true
-  group: apps
-  kind: Deployment
-  path: k8s.io/api/apps/v1
-  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: sig.com
+  group: cache
+  kind: SigAddDeploymentOperator
+  path: github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1
+  version: v1alpha1
 version: "3"

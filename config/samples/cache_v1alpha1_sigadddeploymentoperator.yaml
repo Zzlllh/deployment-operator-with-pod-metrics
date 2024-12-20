@@ -1,0 +1,9 @@
+apiVersion: cache.sig.com/v1alpha1
+kind: SigAddDeploymentOperator
+metadata:
+  labels:
+    app.kubernetes.io/name: metrics-dep-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: sigadddeploymentoperator-sample
+spec:
+  # TODO(user): Add fields here

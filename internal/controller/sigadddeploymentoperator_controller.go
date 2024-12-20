@@ -18,53 +18,46 @@ package controller
 
 import (
 	"context"
-	"k8s.io/apimachinery/pkg/api/errors"
 
-	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	cachev1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1"
 )
 
-// DeploymentReconciler reconciles a Deployment object
-type DeploymentReconciler struct {
+// SigAddDeploymentOperatorReconciler reconciles a SigAddDeploymentOperator object
+type SigAddDeploymentOperatorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=deployments/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
+// +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the Deployment object against the actual cluster state, and then
+// the SigAddDeploymentOperator object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/reconcile
-func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
-	var deployment appsv1.Deployment
-	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
-		if errors.IsNotFound(err) {
-			// Deployment not found. Ignoring since it might have been deleted.
-			return ctrl.Result{}, nil
-		}
-		// Error reading the object. Requeue the request.
-		return ctrl.Result{}, err
-	}
+
+	// TODO(user): your logic here
 
 	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *DeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *SigAddDeploymentOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&appsv1.Deployment{}).
-		Named("deployment").
+		For(&cachev1alpha1.SigAddDeploymentOperator{}).
+		Named("sigadddeploymentoperator").
 		Complete(r)
 }

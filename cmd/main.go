@@ -35,6 +35,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	cachev1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1"
 	"github.com/Zzlllh/deployment-operator-with-pod-metrics/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -47,6 +48,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(cachev1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -140,11 +142,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.DeploymentReconciler{
+	if err = (&controller.SigAddDeploymentOperatorReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Deployment")
+		setupLog.Error(err, "unable to create controller", "controller", "SigAddDeploymentOperator")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
