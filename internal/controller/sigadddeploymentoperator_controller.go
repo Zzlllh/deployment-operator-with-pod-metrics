@@ -18,46 +18,157 @@ package controller
 
 import (
 	"context"
-
+	"github.com/prometheus/client_golang/prometheus"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	cachev1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	metrics "k8s.io/metrics/pkg/client/clientset/versioned"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	_ "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	_ "sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	_ "sigs.k8s.io/controller-runtime/pkg/source"
+	"time"
+
+	sigDepOpv1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1"
 )
 
 // SigAddDeploymentOperatorReconciler reconciles a SigAddDeploymentOperator object
 type SigAddDeploymentOperatorReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme        *runtime.Scheme
+	MetricsClient *metrics.Clientset
+
+	// Prometheus metrics
+	podCPUUsage    *prometheus.GaugeVec
+	podMemoryUsage *prometheus.GaugeVec
 }
 
 // +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the SigAddDeploymentOperator object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/reconcile
+// Grants permissions to manage Deployments in all namespaces
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
+
+// Grants permissions to manage Pods in all namespaces
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;update;patch
+
+// Grants permissions to access Pod Metrics in all namespaces
+// This assumes you're using the metrics.k8s.io API
+// +kubebuilder:rbac:groups=metrics.k8s.io,resources=pods,verbs=get;list;watch
+
 func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	log := log.FromContext(ctx)
+	SigDepOperator := &sigDepOpv1alpha1.SigAddDeploymentOperator{}
+	err := r.Get(ctx, req.NamespacedName, SigDepOperator)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// If the custom resource is not found then it usually means that it was deleted or not created
+			// In this way, we will stop the reconciliation
+			log.Info("memcached resource not found. Ignoring since object must be deleted")
+			return ctrl.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		log.Error(err, "Failed to get memcached")
+		return ctrl.Result{}, err
+	}
 
-	// TODO(user): your logic here
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList); err != nil {
+		log.Error(err, "unable to list pods")
+		return ctrl.Result{RequeueAfter: time.Minute}, err
+	}
+	// Get metrics for each pod
+	for _, pod := range podList.Items {
+		// Skip pods that aren't running
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
 
-	return ctrl.Result{}, nil
+		// Get pod metrics
+		podMetrics, err := r.MetricsClient.MetricsV1beta1().
+			PodMetricses(pod.Namespace).
+			Get(ctx, pod.Name, metav1.GetOptions{})
+		if err != nil {
+			log.Error(err, "unable to get pod metrics",
+				"namespace", pod.Namespace,
+				"pod", pod.Name)
+			continue
+		}
+
+		// Process container metrics
+		for _, container := range podMetrics.Containers {
+			// CPU usage
+			cpuQuantity := container.Usage.Cpu()
+			cpuCores := float64(cpuQuantity.MilliValue()) / 1000.0
+			log.Info("Pod CPU metrics",
+				"namespace", pod.Namespace,
+				"pod", pod.Name,
+				"container", container.Name,
+				"cpu_millicores", cpuQuantity.MilliValue(),
+				"cpu_cores", cpuCores)
+			r.podCPUUsage.WithLabelValues(
+				pod.Namespace,
+				pod.Name,
+			).Set(cpuCores)
+
+			// Memory usage
+			memoryQuantity := container.Usage.Memory()
+			memoryBytes := float64(memoryQuantity.Value())
+			log.Info("Pod memory metrics",
+				"namespace", pod.Namespace,
+				"pod", pod.Name,
+				"container", container.Name,
+				"memory_bytes", memoryBytes,
+				"memory_Mi", memoryBytes/1024/1024)
+			r.podMemoryUsage.WithLabelValues(
+				pod.Namespace,
+				pod.Name,
+			).Set(memoryBytes)
+		}
+	}
+
+	// Requeue after interval
+	return reconcile.Result{RequeueAfter: time.Minute}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *SigAddDeploymentOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
+
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cachev1alpha1.SigAddDeploymentOperator{}).
+		For(&sigDepOpv1alpha1.SigAddDeploymentOperator{}).
 		Named("sigadddeploymentoperator").
 		Complete(r)
+}
+
+// Initialize creates new Prometheus metrics
+func (r *SigAddDeploymentOperatorReconciler) Initialize() {
+	r.podCPUUsage = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "pod_cpu_usage",
+			Help: "CPU usage in cores by pod",
+		},
+		[]string{"namespace", "pod"},
+	)
+
+	r.podMemoryUsage = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "pod_memory_usage",
+			Help: "Memory usage in bytes by pod",
+		},
+		[]string{"namespace", "pod"},
+	)
+
+	// Register metrics with Prometheus
+	prometheus.MustRegister(r.podCPUUsage)
+	prometheus.MustRegister(r.podMemoryUsage)
 }

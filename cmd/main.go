@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	metrics "k8s.io/metrics/pkg/client/clientset/versioned"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -141,11 +142,19 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+	metricsClient, err := metrics.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to create metrics client")
+		os.Exit(1)
+	}
+	reconciler := &controller.SigAddDeploymentOperatorReconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		MetricsClient: metricsClient,
+	}
+	reconciler.Initialize()
 
-	if err = (&controller.SigAddDeploymentOperatorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	if err = reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SigAddDeploymentOperator")
 		os.Exit(1)
 	}

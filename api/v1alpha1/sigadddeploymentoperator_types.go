@@ -20,22 +20,50 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Define condition types
+const (
+	ConditionEnabled = "Enabled"
+	ConditionStopped = "Stopped"
+)
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+func setCondition(status *SigAddDeploymentOperatorStatus, conditionType, statusValue, reason, message string) {
+	condition := metav1.Condition{
+		Type:               conditionType,
+		Status:             metav1.ConditionStatus(statusValue),
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+
+	// Check if the condition already exists
+	for i, cond := range status.Conditions {
+		if cond.Type == conditionType {
+			status.Conditions[i] = condition
+			return
+		}
+	}
+
+	// If not, append the new condition
+	status.Conditions = append(status.Conditions, condition)
+}
 
 // SigAddDeploymentOperatorSpec defines the desired state of SigAddDeploymentOperator.
 type SigAddDeploymentOperatorSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of SigAddDeploymentOperator. Edit sigadddeploymentoperator_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	Enable          string `json:"enable,omitempty"`
+	MemoryThreshold string `json:"memoryThreshold,omitempty"`
 }
 
 // SigAddDeploymentOperatorStatus defines the observed state of SigAddDeploymentOperator.
 type SigAddDeploymentOperatorStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+	Conditions  []metav1.Condition `json:"conditions,omitempty"`
+	LastUpdated metav1.Time        `json:"lastUpdated,omitempty"`
 }
 
 // +kubebuilder:object:root=true
