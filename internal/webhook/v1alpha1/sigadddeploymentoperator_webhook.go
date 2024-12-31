@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -84,6 +85,28 @@ func (d *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, o
 			deployment.Annotations = make(map[string]string)
 		}
 		deployment.Annotations["test"] = "working"
+
+		// Add node affinity
+		if deployment.Spec.Template.Spec.Affinity == nil {
+			deployment.Spec.Template.Spec.Affinity = &corev1.Affinity{}
+		}
+
+		deployment.Spec.Template.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{
+				{
+					Weight: 1,
+					Preference: corev1.NodeSelectorTerm{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      "memory",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{"high"},
+							},
+						},
+					},
+				},
+			},
+		}
 	}
 
 	return nil
