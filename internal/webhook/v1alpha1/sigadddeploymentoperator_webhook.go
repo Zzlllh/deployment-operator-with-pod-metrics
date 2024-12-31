@@ -42,6 +42,13 @@ func SetupSigAddDeploymentOperatorWebhookWithManager(mgr ctrl.Manager) error {
 		Complete()
 }
 
+func SetupDeploymentWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr).
+		For(&appsv1.Deployment{}).
+		WithDefaulter(&SigAddDeploymentOperatorCustomDefaulter{}). // We already have this defaulter
+		Complete()
+}
+
 // TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 
 // Mutating webhook for deployments
