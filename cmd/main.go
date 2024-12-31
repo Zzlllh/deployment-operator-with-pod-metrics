@@ -19,8 +19,9 @@ package main
 import (
 	"crypto/tls"
 	"flag"
-	metrics "k8s.io/metrics/pkg/client/clientset/versioned"
 	"os"
+
+	metrics "k8s.io/metrics/pkg/client/clientset/versioned"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -38,6 +39,7 @@ import (
 
 	cachev1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1"
 	"github.com/Zzlllh/deployment-operator-with-pod-metrics/internal/controller"
+	webhookcachev1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -124,6 +126,7 @@ func main() {
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
+		PprofBindAddress:       ":8082",
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "1f1b79e4.sig.com",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
@@ -157,6 +160,13 @@ func main() {
 	if err = reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SigAddDeploymentOperator")
 		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err = webhookcachev1alpha1.SetupSigAddDeploymentOperatorWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "SigAddDeploymentOperator")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
