@@ -155,7 +155,6 @@ func main() {
 		Scheme:        mgr.GetScheme(),
 		MetricsClient: metricsClient,
 	}
-	reconciler.Initialize()
 
 	if err = reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SigAddDeploymentOperator")

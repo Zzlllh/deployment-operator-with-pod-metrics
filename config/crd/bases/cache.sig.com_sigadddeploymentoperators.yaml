@@ -41,10 +41,26 @@ spec:
             description: SigAddDeploymentOperatorSpec defines the desired state of
               SigAddDeploymentOperator.
             properties:
+              cpuThreshold:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
               enable:
                 type: boolean
               memoryThreshold:
-                type: string
+                anyOf:
+                - type: integer
+                - type: string
+                description: MemoryThreshold specifies the memory threshold value
+                  that triggers the operator
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+            required:
+            - cpuThreshold
+            - enable
+            - memoryThreshold
             type: object
           status:
             description: SigAddDeploymentOperatorStatus defines the observed state

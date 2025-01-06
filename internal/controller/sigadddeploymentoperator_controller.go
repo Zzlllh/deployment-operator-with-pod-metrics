@@ -18,16 +18,14 @@ package controller
 
 import (
 	"context"
-	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metrics "k8s.io/metrics/pkg/client/clientset/versioned"
 
@@ -36,12 +34,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	_ "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	"time"
+
 	_ "sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	_ "sigs.k8s.io/controller-runtime/pkg/source"
-	"time"
 
 	sigDepOpv1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1"
+)
+
+// Previous threshold values for comparison
+var (
+	previousMemoryThreshold float64
+	previousCPUThreshold    float64
 )
 
 // SigAddDeploymentOperatorReconciler reconciles a SigAddDeploymentOperator object
@@ -49,10 +54,6 @@ type SigAddDeploymentOperatorReconciler struct {
 	client.Client
 	Scheme        *runtime.Scheme
 	MetricsClient *metrics.Clientset
-
-	// Prometheus metrics
-	podCPUUsage    *prometheus.GaugeVec
-	podMemoryUsage *prometheus.GaugeVec
 }
 
 // +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators,verbs=get;list;watch;create;update;patch;delete
@@ -69,6 +70,15 @@ type SigAddDeploymentOperatorReconciler struct {
 // This assumes you're using the metrics.k8s.io API
 // +kubebuilder:rbac:groups=metrics.k8s.io,resources=pods,verbs=get;list;watch
 
+// ContainerMetrics holds the metrics information for a container
+type ContainerMetrics struct {
+	ContainerName  string
+	MaxCPUUsage    float64
+	MaxMemoryUsage float64
+	PodName        string
+	Namespace      string
+}
+
 func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
@@ -76,39 +86,63 @@ func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req 
 	err := r.Get(ctx, req.NamespacedName, SigDepOperator)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// If the custom resource is not found then it usually means that it was deleted or not created
-			// In this way, we will stop the reconciliation
 			log.Info("SigAddDeploymentOperator resource not found. Ignoring since object must be deleted")
 			return ctrl.Result{}, nil
 		}
-		// Error reading the object - requeue the request.
 		log.Error(err, "Failed to get SigAddDeploymentOperator")
 		return ctrl.Result{}, err
 	}
 
 	if !SigDepOperator.Spec.Enable {
 		log.Info("Operator is disabled, skipping reconciliation")
-		return reconcile.Result{}, nil // Return without error as this is intended
+		return ctrl.Result{}, nil
 	}
 
+	if err := r.monitorDeploymentMetrics(ctx, log, SigDepOperator); err != nil {
+		log.Error(err, "failed to monitor deployment metrics")
+		return ctrl.Result{RequeueAfter: time.Minute}, err
+	}
+
+	// Requeue after 1 minute for continuous monitoring
+	return ctrl.Result{RequeueAfter: time.Minute}, nil
+}
+
+func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx context.Context, log logr.Logger, SigDepOperator *sigDepOpv1alpha1.SigAddDeploymentOperator) error {
 	var deployments appsv1.DeploymentList
 	if err := r.List(ctx, &deployments); err != nil {
-		log.Error(err, "unable to list deployments")
-		return reconcile.Result{RequeueAfter: time.Minute}, err
+		return err
 	}
+
+	// Get current thresholds
+	currentMemoryThreshold := SigDepOperator.Spec.MemoryThreshold.AsApproximateFloat64()
+	currentCPUThreshold := SigDepOperator.Spec.CPUThreshold.AsApproximateFloat64()
+
+	// Check if either threshold has changed
+	if currentMemoryThreshold != previousMemoryThreshold ||
+		currentCPUThreshold != previousCPUThreshold {
+		log.Info("Thresholds changed, clearing metrics history",
+			"old_memory_threshold", previousMemoryThreshold,
+			"new_memory_threshold", currentMemoryThreshold,
+			"old_cpu_threshold", previousCPUThreshold,
+			"new_cpu_threshold", currentCPUThreshold)
+
+		// Clear existing metrics
+		sigDepOpv1alpha1.HighUsageContainers = nil
+
+		// Update stored thresholds
+		previousMemoryThreshold = currentMemoryThreshold
+		previousCPUThreshold = currentCPUThreshold
+	}
+
 	// Filter deployments containing "sigen" in name
 	for _, deployment := range deployments.Items {
-		log.Info("Checking deployment", "name", deployment.Name)
-		if !strings.Contains(strings.ToLower(deployment.Name), "sigen") {
-			continue
-		}
-		log.Info("Passed deployment", "name", deployment.Name)
-
+		// if !strings.Contains(strings.ToLower(deployment.Name), "sigen") {
+		// 	continue
+		// }
 		// Get pods for this deployment
 		var podList corev1.PodList
 		if err := r.List(ctx, &podList, client.MatchingLabels(deployment.Spec.Selector.MatchLabels)); err != nil {
-			log.Error(err, "unable to list pods for deployment",
-				"deployment", deployment.Name)
+			log.Error(err, "unable to list pods for deployment", "deployment", deployment.Name)
 			continue
 		}
 
@@ -135,67 +169,46 @@ func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req 
 				memoryQuantity := container.Usage.Memory()
 				memoryBytes := float64(memoryQuantity.Value())
 				memoryGB := memoryBytes / (1024 * 1024 * 1024) // Convert to GB
-				log.Info("Container memory usage",
-					"container", container.Name,
-					"memory_gb", memoryGB)
-				if memoryGB > 1.0 {
-					log.Info("Found container using more than 1GB memory",
-						"deployment", deployment.Name,
-						"namespace", pod.Namespace,
-						"pod", pod.Name,
-						"container", container.Name,
-						"memory_bytes", memoryBytes,
-						"memory_GB", memoryGB)
 
-					// Record metrics
-					r.podMemoryUsage.WithLabelValues(
-						pod.Namespace,
-						pod.Name,
-					).Set(memoryBytes)
+				cpuQuantity := container.Usage.Cpu()
+				cpuCores := float64(cpuQuantity.MilliValue()) / 1000.0
 
-					// CPU metrics for context
-					cpuQuantity := container.Usage.Cpu()
-					cpuCores := float64(cpuQuantity.MilliValue()) / 1000.0
-					r.podCPUUsage.WithLabelValues(
-						pod.Namespace,
-						pod.Name,
-					).Set(cpuCores)
+				// Check both memory and CPU thresholds
+				if memoryGB > currentMemoryThreshold || cpuCores > currentCPUThreshold {
+					sigDepOpv1alpha1.HighUsageContainers = append(sigDepOpv1alpha1.HighUsageContainers,
+						sigDepOpv1alpha1.ContainerMetrics{
+							ContainerName:  container.Name,
+							MaxCPUUsage:    cpuCores,
+							MaxMemoryUsage: memoryGB,
+							PodName:        pod.Name,
+							Namespace:      pod.Namespace,
+						})
+
 				}
 			}
 		}
 	}
-	// Requeue after interval
-	return reconcile.Result{RequeueAfter: time.Minute}, nil
+
+	// Log the high usage containers
+	if len(sigDepOpv1alpha1.HighUsageContainers) > 0 {
+		log.Info("Containers exceeding threshold", "count", len(sigDepOpv1alpha1.HighUsageContainers))
+		for _, container := range sigDepOpv1alpha1.HighUsageContainers {
+			log.Info("High usage container",
+				"container", container.ContainerName,
+				"namespace", container.Namespace,
+				"pod", container.PodName,
+				"cpu_cores", container.MaxCPUUsage,
+				"memory_gb", container.MaxMemoryUsage)
+		}
+	}
+
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *SigAddDeploymentOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sigDepOpv1alpha1.SigAddDeploymentOperator{}).
 		Named("sigadddeploymentoperator").
 		Complete(r)
-}
-
-// Initialize creates new Prometheus metrics
-func (r *SigAddDeploymentOperatorReconciler) Initialize() {
-	r.podCPUUsage = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "pod_cpu_usage",
-			Help: "CPU usage in cores by pod",
-		},
-		[]string{"namespace", "pod"},
-	)
-
-	r.podMemoryUsage = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "pod_memory_usage",
-			Help: "Memory usage in bytes by pod",
-		},
-		[]string{"namespace", "pod"},
-	)
-
-	// Register metrics with Prometheus
-	prometheus.MustRegister(r.podCPUUsage)
-	prometheus.MustRegister(r.podMemoryUsage)
 }

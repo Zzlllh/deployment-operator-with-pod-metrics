@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -54,8 +55,10 @@ type SigAddDeploymentOperatorSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	Enable          bool   `json:"enable,omitempty"`
-	MemoryThreshold string `json:"memoryThreshold,omitempty"`
+	Enable bool `json:"enable"`
+	// MemoryThreshold specifies the memory threshold value that triggers the operator
+	MemoryThreshold resource.Quantity `json:"memoryThreshold"`
+	CPUThreshold    resource.Quantity `json:"cpuThreshold"`
 }
 
 // SigAddDeploymentOperatorStatus defines the observed state of SigAddDeploymentOperator.
@@ -65,6 +68,19 @@ type SigAddDeploymentOperatorStatus struct {
 	Conditions  []metav1.Condition `json:"conditions,omitempty"`
 	LastUpdated metav1.Time        `json:"lastUpdated,omitempty"`
 }
+
+// ContainerMetrics holds the metrics information for a container
+// Note: This is a helper type and not registered as a Kubernetes API type
+type ContainerMetrics struct {
+	ContainerName  string  `json:"containerName"`
+	MaxCPUUsage    float64 `json:"maxCPUUsage"`
+	MaxMemoryUsage float64 `json:"maxMemoryUsage"`
+	PodName        string  `json:"podName"`
+	Namespace      string  `json:"namespace"`
+}
+
+// HighUsageContainers stores containers that exceed resource thresholds
+var HighUsageContainers []ContainerMetrics
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
