@@ -21,35 +21,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// Define condition types
-const (
-	ConditionEnabled = "Enabled"
-	ConditionStopped = "Stopped"
-)
-
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-func setCondition(status *SigAddDeploymentOperatorStatus, conditionType, statusValue, reason, message string) {
-	condition := metav1.Condition{
-		Type:               conditionType,
-		Status:             metav1.ConditionStatus(statusValue),
-		LastTransitionTime: metav1.Now(),
-		Reason:             reason,
-		Message:            message,
-	}
-
-	// Check if the condition already exists
-	for i, cond := range status.Conditions {
-		if cond.Type == conditionType {
-			status.Conditions[i] = condition
-			return
-		}
-	}
-
-	// If not, append the new condition
-	status.Conditions = append(status.Conditions, condition)
-}
-
 // SigAddDeploymentOperatorSpec defines the desired state of SigAddDeploymentOperator.
 type SigAddDeploymentOperatorSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -59,6 +30,8 @@ type SigAddDeploymentOperatorSpec struct {
 	// MemoryThreshold specifies the memory threshold value that triggers the operator
 	MemoryThreshold resource.Quantity `json:"memoryThreshold"`
 	CPUThreshold    resource.Quantity `json:"cpuThreshold"`
+	//ratio for Exponential Moving Average to calculate an approx avg
+	EMARatio float64 `json:"emaRatio"`
 }
 
 // SigAddDeploymentOperatorStatus defines the observed state of SigAddDeploymentOperator.
@@ -72,15 +45,47 @@ type SigAddDeploymentOperatorStatus struct {
 // ContainerMetrics holds the metrics information for a container
 // Note: This is a helper type and not registered as a Kubernetes API type
 type ContainerMetrics struct {
-	ContainerName  string  `json:"containerName"`
-	MaxCPUUsage    float64 `json:"maxCPUUsage"`
-	MaxMemoryUsage float64 `json:"maxMemoryUsage"`
-	PodName        string  `json:"podName"`
-	Namespace      string  `json:"namespace"`
+	MaxCPU      MemCpuPair `json:"maxCPUUsage"`
+	MaxMemory   MemCpuPair `json:"maxMemoryUsage"`
+	MemCpuRatio MemCpuPair `json:"maxMemCpuRatio"`
+	//Exponential Moving Average to calculate an approx avg
+	EMAMemCPURatio float64 `json:"emaMCR"` // memory cpu ratio
+	EMAMemory      float64 `json:"emaMem"`
+	EMACpu         float64 `json:"emaCPU"`
 }
 
-// HighUsageContainers stores containers that exceed resource thresholds
-var HighUsageContainers []ContainerMetrics
+func (m *ContainerMetrics) MergeMax(other ContainerMetrics) {
+	otherRatio := other.MemCpuRatio.Mem / other.MemCpuRatio.Cpu
+	curRatio := m.MemCpuRatio.Mem / m.MemCpuRatio.Cpu
+	if otherRatio > curRatio {
+		m.MemCpuRatio = other.MemCpuRatio
+	}
+	if other.MaxMemory.Mem > m.MaxMemory.Mem {
+		m.MaxMemory.Mem = other.MaxMemory.Mem
+	}
+	if other.MaxCPU.Cpu > m.MaxCPU.Cpu {
+		m.MaxCPU.Cpu = other.MaxCPU.Cpu
+	}
+}
+func (m *ContainerMetrics) CalculateEMA(other ContainerMetrics, ratio float64) {
+	m.EMACpu = other.EMACpu*ratio + (1.0-ratio)*m.EMACpu
+	m.EMAMemory = other.EMAMemory*ratio + (1.0-ratio)*m.EMAMemory
+	m.EMAMemCPURatio = other.MemCpuRatio*ratio + (1.0-ratio)*m.EMAMemCPURatio
+}
+
+type ContainerId struct {
+	ContainerName string `json:"containerName"`
+	PodName       string `json:"podName"`
+	Namespace     string `json:"namespace"`
+}
+
+type MemCpuPair struct {
+	Cpu float64 `json:"cpuUsage"`
+	Mem float64 `json:"memoryUsage"`
+}
+
+// containerUsage stores containers usage
+var ContainerUsage = make(map[ContainerId]ContainerMetrics)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

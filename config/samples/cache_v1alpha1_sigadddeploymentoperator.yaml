@@ -7,5 +7,6 @@ metadata:
   name: sigadddeploymentoperator-sample
   namespace: metrics-dep-operator-system
 spec:
-  enable: false
-  memoryThreshold: "test2"
+  enable: true
+  memoryThreshold: 500Mi
+  cpuThreshold: 500m

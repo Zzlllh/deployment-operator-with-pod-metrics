@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -70,15 +71,6 @@ type SigAddDeploymentOperatorReconciler struct {
 // This assumes you're using the metrics.k8s.io API
 // +kubebuilder:rbac:groups=metrics.k8s.io,resources=pods,verbs=get;list;watch
 
-// ContainerMetrics holds the metrics information for a container
-type ContainerMetrics struct {
-	ContainerName  string
-	MaxCPUUsage    float64
-	MaxMemoryUsage float64
-	PodName        string
-	Namespace      string
-}
-
 func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
@@ -116,6 +108,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 	// Get current thresholds
 	currentMemoryThreshold := SigDepOperator.Spec.MemoryThreshold.AsApproximateFloat64()
 	currentCPUThreshold := SigDepOperator.Spec.CPUThreshold.AsApproximateFloat64()
+	currentEMARatio := SigDepOperator.Spec.EMARatio
 
 	// Check if either threshold has changed
 	if currentMemoryThreshold != previousMemoryThreshold ||
@@ -123,11 +116,12 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 		log.Info("Thresholds changed, clearing metrics history",
 			"old_memory_threshold", previousMemoryThreshold,
 			"new_memory_threshold", currentMemoryThreshold,
+
 			"old_cpu_threshold", previousCPUThreshold,
 			"new_cpu_threshold", currentCPUThreshold)
 
 		// Clear existing metrics
-		sigDepOpv1alpha1.HighUsageContainers = nil
+		sigDepOpv1alpha1.ContainerUsage = nil
 
 		// Update stored thresholds
 		previousMemoryThreshold = currentMemoryThreshold
@@ -145,7 +139,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 			log.Error(err, "unable to list pods for deployment", "deployment", deployment.Name)
 			continue
 		}
-
+		podSet := make(map[sigDepOpv1alpha1.ContainerId]struct{})
 		// Check each pod's metrics
 		for _, pod := range podList.Items {
 			// Skip pods that aren't running
@@ -175,31 +169,54 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 
 				// Check both memory and CPU thresholds
 				if memoryGB > currentMemoryThreshold || cpuCores > currentCPUThreshold {
-					sigDepOpv1alpha1.HighUsageContainers = append(sigDepOpv1alpha1.HighUsageContainers,
-						sigDepOpv1alpha1.ContainerMetrics{
-							ContainerName:  container.Name,
-							MaxCPUUsage:    cpuCores,
-							MaxMemoryUsage: memoryGB,
-							PodName:        pod.Name,
-							Namespace:      pod.Namespace,
-						})
+					//current Id
+					curId := sigDepOpv1alpha1.ContainerId{
+						ContainerName: container.Name,
+						PodName:       pod.Name,
+						Namespace:     pod.Namespace,
+					}
+					//record existing pods to a set
+					podSet[curId] = struct{}{}
+					ratio := memoryGB / cpuCores
+					containerMemCpuPair := sigDepOpv1alpha1.MemCpuPair{
+						Cpu: cpuCores,
+						Mem: memoryGB,
+					}
+					//current metrics
+					curMetrics := sigDepOpv1alpha1.ContainerMetrics{
+						MaxCPU:         containerMemCpuPair,
+						MaxMemory:      containerMemCpuPair,
+						MemCpuRatio:    containerMemCpuPair,
+						EMAMemCPURatio: ratio,
+						EMAMemory:      memoryGB,
+						EMACpu:         cpuCores,
+					}
+					//determine if cur pod's metrics is already in, if in, change EMA and determine if its any max usage
+					if storedMetrics, ok := sigDepOpv1alpha1.ContainerUsage[curId]; ok {
+						storedMetrics.MergeMax(curMetrics)
+						storedMetrics.CalculateEMA(curMetrics, currentEMARatio)
+						sigDepOpv1alpha1.ContainerUsage[curId] = storedMetrics
 
+					} else {
+						sigDepOpv1alpha1.ContainerUsage[curId] = curMetrics
+					}
 				}
 			}
 		}
 	}
 
-	// Log the high usage containers
-	if len(sigDepOpv1alpha1.HighUsageContainers) > 0 {
-		log.Info("Containers exceeding threshold", "count", len(sigDepOpv1alpha1.HighUsageContainers))
-		for _, container := range sigDepOpv1alpha1.HighUsageContainers {
-			log.Info("High usage container",
-				"container", container.ContainerName,
-				"namespace", container.Namespace,
-				"pod", container.PodName,
-				"cpu_cores", container.MaxCPUUsage,
-				"memory_gb", container.MaxMemoryUsage)
-		}
+	// Create a clean logger for metrics
+	metricsLogger := log.WithName("metrics").V(10)
+
+	// Log the high usage containers with clean output
+
+	for containerID, container := range sigDepOpv1alpha1.ContainerUsage {
+		metricsLogger.Info("Resource usage",
+			"name", containerID,
+			"maxMemCpuRatio", container.MemCpuRatio,
+			"maxMemory_mem", container.MaxMemory.Mem,
+			"maxMemory_cpu", container.MaxMemory.Cpu,
+			"maxCpu", container.MaxCPU,
 	}
 
 	return nil
