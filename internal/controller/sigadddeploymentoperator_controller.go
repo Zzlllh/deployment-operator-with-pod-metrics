@@ -19,11 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
+
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -122,12 +123,11 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 		log.Info("Thresholds changed, clearing metrics history",
 			"old_memory_threshold", previousMemoryThreshold,
 			"new_memory_threshold", currentMemoryThreshold,
-
 			"old_cpu_threshold", previousCPUThreshold,
 			"new_cpu_threshold", currentCPUThreshold)
 
-		// Clear existing metrics
-		sigDepOpv1alpha1.ContainerUsage = nil
+		// Clear existing metrics - FIX: reinitialize instead of setting to nil
+		sigDepOpv1alpha1.ContainerUsage = make(map[sigDepOpv1alpha1.ContainerId]sigDepOpv1alpha1.ContainerMetrics)
 
 		// Update stored thresholds
 		previousMemoryThreshold = currentMemoryThreshold

@@ -50,6 +50,7 @@ spec:
               emaRatio:
                 description: ratio for Exponential Moving Average to calculate an
                   approx avg
+                type: string
               enable:
                 type: boolean
               memoryThreshold:

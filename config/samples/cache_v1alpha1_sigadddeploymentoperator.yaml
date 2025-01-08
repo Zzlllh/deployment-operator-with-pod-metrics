@@ -9,4 +9,5 @@ metadata:
 spec:
   enable: true
   memoryThreshold: 500Mi
-  cpuThreshold: 500m
+  cpuThreshold: 1m
+  emaRatio: "0.5"
