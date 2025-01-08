@@ -31,7 +31,7 @@ type SigAddDeploymentOperatorSpec struct {
 	MemoryThreshold resource.Quantity `json:"memoryThreshold"`
 	CPUThreshold    resource.Quantity `json:"cpuThreshold"`
 	//ratio for Exponential Moving Average to calculate an approx avg
-	EMARatio float64 `json:"emaRatio"`
+	EMARatio string `json:"emaRatio"`
 }
 
 // SigAddDeploymentOperatorStatus defines the observed state of SigAddDeploymentOperator.
@@ -55,9 +55,8 @@ type ContainerMetrics struct {
 }
 
 func (m *ContainerMetrics) MergeMax(other ContainerMetrics) {
-	otherRatio := other.MemCpuRatio.Mem / other.MemCpuRatio.Cpu
-	curRatio := m.MemCpuRatio.Mem / m.MemCpuRatio.Cpu
-	if otherRatio > curRatio {
+
+	if other.MemCpuRatio.Ratio() > m.MemCpuRatio.Ratio() {
 		m.MemCpuRatio = other.MemCpuRatio
 	}
 	if other.MaxMemory.Mem > m.MaxMemory.Mem {
@@ -70,7 +69,7 @@ func (m *ContainerMetrics) MergeMax(other ContainerMetrics) {
 func (m *ContainerMetrics) CalculateEMA(other ContainerMetrics, ratio float64) {
 	m.EMACpu = other.EMACpu*ratio + (1.0-ratio)*m.EMACpu
 	m.EMAMemory = other.EMAMemory*ratio + (1.0-ratio)*m.EMAMemory
-	m.EMAMemCPURatio = other.MemCpuRatio*ratio + (1.0-ratio)*m.EMAMemCPURatio
+	m.EMAMemCPURatio = other.MemCpuRatio.Ratio()*float64(ratio) + (1.0-ratio)*m.EMAMemCPURatio
 }
 
 type ContainerId struct {
@@ -82,6 +81,10 @@ type ContainerId struct {
 type MemCpuPair struct {
 	Cpu float64 `json:"cpuUsage"`
 	Mem float64 `json:"memoryUsage"`
+}
+
+func (pair MemCpuPair) Ratio() float64 {
+	return pair.Mem / pair.Cpu
 }
 
 // containerUsage stores containers usage

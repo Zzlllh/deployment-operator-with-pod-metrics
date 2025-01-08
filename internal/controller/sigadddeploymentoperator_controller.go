@@ -19,11 +19,11 @@ package controller
 import (
 	"context"
 	"fmt"
-
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -108,7 +108,13 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 	// Get current thresholds
 	currentMemoryThreshold := SigDepOperator.Spec.MemoryThreshold.AsApproximateFloat64()
 	currentCPUThreshold := SigDepOperator.Spec.CPUThreshold.AsApproximateFloat64()
-	currentEMARatio := SigDepOperator.Spec.EMARatio
+
+	currentEMARatio, err := strconv.ParseFloat(SigDepOperator.Spec.EMARatio, 64)
+	if err != nil {
+		// Handle parsing error
+		fmt.Println("Error parsing string to float64:", err)
+		return err
+	}
 
 	// Check if either threshold has changed
 	if currentMemoryThreshold != previousMemoryThreshold ||
@@ -139,6 +145,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 			log.Error(err, "unable to list pods for deployment", "deployment", deployment.Name)
 			continue
 		}
+		// list current pod set, delete pods disappeared
 		podSet := make(map[sigDepOpv1alpha1.ContainerId]struct{})
 		// Check each pod's metrics
 		for _, pod := range podList.Items {
@@ -177,11 +184,12 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 					}
 					//record existing pods to a set
 					podSet[curId] = struct{}{}
-					ratio := memoryGB / cpuCores
+
 					containerMemCpuPair := sigDepOpv1alpha1.MemCpuPair{
 						Cpu: cpuCores,
 						Mem: memoryGB,
 					}
+					ratio := containerMemCpuPair.Ratio()
 					//current metrics
 					curMetrics := sigDepOpv1alpha1.ContainerMetrics{
 						MaxCPU:         containerMemCpuPair,
@@ -196,7 +204,6 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 						storedMetrics.MergeMax(curMetrics)
 						storedMetrics.CalculateEMA(curMetrics, currentEMARatio)
 						sigDepOpv1alpha1.ContainerUsage[curId] = storedMetrics
-
 					} else {
 						sigDepOpv1alpha1.ContainerUsage[curId] = curMetrics
 					}
@@ -216,7 +223,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 			"maxMemCpuRatio", container.MemCpuRatio,
 			"maxMemory_mem", container.MaxMemory.Mem,
 			"maxMemory_cpu", container.MaxMemory.Cpu,
-			"maxCpu", container.MaxCPU,
+			"maxCpu", container.MaxCPU)
 	}
 
 	return nil
