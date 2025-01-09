@@ -19,12 +19,14 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strconv"
-
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"math"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sort"
+	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -49,7 +51,9 @@ import (
 var (
 	previousMemoryThreshold float64
 	previousCPUThreshold    float64
+	MaxHeap                 []int
 )
+var logger = zap.New(zap.UseDevMode(true)).WithName("clean-logger")
 
 // SigAddDeploymentOperatorReconciler reconciles a SigAddDeploymentOperator object
 type SigAddDeploymentOperatorReconciler struct {
@@ -107,11 +111,11 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 	}
 
 	// Get current thresholds
-	currentMemoryThreshold := SigDepOperator.Spec.MemoryThreshold.AsApproximateFloat64()
+	currentMemoryThreshold := SigDepOperator.Spec.MemoryThreshold.AsApproximateFloat64() / 1000 / 1000 / 1000
 	currentCPUThreshold := SigDepOperator.Spec.CPUThreshold.AsApproximateFloat64()
 
 	currentEMARatio, err := strconv.ParseFloat(SigDepOperator.Spec.EMARatio, 64)
-	if err != nil {
+	if err != nil || math.Abs(currentEMARatio) >= 1 {
 		// Handle parsing error
 		fmt.Println("Error parsing string to float64:", err)
 		return err
@@ -120,7 +124,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 	// Check if either threshold has changed
 	if currentMemoryThreshold != previousMemoryThreshold ||
 		currentCPUThreshold != previousCPUThreshold {
-		log.Info("Thresholds changed, clearing metrics history",
+		logger.Info("Thresholds changed, clearing metrics history",
 			"old_memory_threshold", previousMemoryThreshold,
 			"new_memory_threshold", currentMemoryThreshold,
 			"old_cpu_threshold", previousCPUThreshold,
@@ -133,7 +137,10 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 		previousMemoryThreshold = currentMemoryThreshold
 		previousCPUThreshold = currentCPUThreshold
 	}
-
+	// initialize variables on every reconcile
+	podSet := make(map[sigDepOpv1alpha1.ContainerId]struct{})
+	sigDepOpv1alpha1.KvSliceBasedOnMem = nil
+	sigDepOpv1alpha1.KvSliceBasedOnRatio = nil
 	// Filter deployments containing "sigen" in name
 	for _, deployment := range deployments.Items {
 		// if !strings.Contains(strings.ToLower(deployment.Name), "sigen") {
@@ -146,7 +153,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 			continue
 		}
 		// list current pod set, delete pods disappeared
-		podSet := make(map[sigDepOpv1alpha1.ContainerId]struct{})
+
 		// Check each pod's metrics
 		for _, pod := range podList.Items {
 			// Skip pods that aren't running
@@ -174,16 +181,17 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 				cpuQuantity := container.Usage.Cpu()
 				cpuCores := float64(cpuQuantity.MilliValue()) / 1000.0
 
+				//current Id
+				curId := sigDepOpv1alpha1.ContainerId{
+					ContainerName: container.Name,
+					PodName:       pod.Name,
+					Namespace:     pod.Namespace,
+				}
+				//record existing pods to a set
+				podSet[curId] = struct{}{}
+
 				// Check both memory and CPU thresholds
 				if memoryGB > currentMemoryThreshold || cpuCores > currentCPUThreshold {
-					//current Id
-					curId := sigDepOpv1alpha1.ContainerId{
-						ContainerName: container.Name,
-						PodName:       pod.Name,
-						Namespace:     pod.Namespace,
-					}
-					//record existing pods to a set
-					podSet[curId] = struct{}{}
 
 					containerMemCpuPair := sigDepOpv1alpha1.MemCpuPair{
 						Cpu: cpuCores,
@@ -204,6 +212,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 						storedMetrics.MergeMax(curMetrics)
 						storedMetrics.CalculateEMA(curMetrics, currentEMARatio)
 						sigDepOpv1alpha1.ContainerUsage[curId] = storedMetrics
+
 					} else {
 						sigDepOpv1alpha1.ContainerUsage[curId] = curMetrics
 					}
@@ -211,21 +220,49 @@ func (r *SigAddDeploymentOperatorReconciler) monitorDeploymentMetrics(ctx contex
 			}
 		}
 	}
-
+	for key := range sigDepOpv1alpha1.ContainerUsage {
+		if _, ok := podSet[key]; !ok {
+			// k not found in mySet
+			delete(sigDepOpv1alpha1.ContainerUsage, key)
+		} else {
+			sigDepOpv1alpha1.KvSliceBasedOnMem = append(sigDepOpv1alpha1.KvSliceBasedOnMem, sigDepOpv1alpha1.IdMetrics{Key: key, Value: sigDepOpv1alpha1.ContainerUsage[key]})
+			sigDepOpv1alpha1.KvSliceBasedOnRatio = append(sigDepOpv1alpha1.KvSliceBasedOnRatio, sigDepOpv1alpha1.IdMetrics{Key: key, Value: sigDepOpv1alpha1.ContainerUsage[key]})
+		}
+	}
+	sort.Slice(sigDepOpv1alpha1.KvSliceBasedOnMem, func(i, j int) bool {
+		return sigDepOpv1alpha1.KvSliceBasedOnMem[i].Value.MaxMemory.Mem > sigDepOpv1alpha1.KvSliceBasedOnMem[j].Value.MaxMemory.Mem
+	})
+	sort.Slice(sigDepOpv1alpha1.KvSliceBasedOnRatio, func(i, j int) bool {
+		return sigDepOpv1alpha1.KvSliceBasedOnRatio[i].Value.MemCpuRatio.Ratio() > sigDepOpv1alpha1.KvSliceBasedOnRatio[j].Value.MemCpuRatio.Ratio()
+	})
 	// Create a clean logger for metrics
-	metricsLogger := log.WithName("metrics").V(10)
 
 	// Log the high usage containers with clean output
 
-	for containerID, container := range sigDepOpv1alpha1.ContainerUsage {
-		metricsLogger.Info("Resource usage",
-			"name", containerID,
-			"maxMemCpuRatio", container.MemCpuRatio,
-			"maxMemory_mem", container.MaxMemory.Mem,
-			"maxMemory_cpu", container.MaxMemory.Cpu,
-			"maxCpu", container.MaxCPU)
+	for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnMem {
+		if i >= SigDepOperator.Spec.DisplayCount {
+			break
+		}
+		logger.Info("Max memory resource usage",
+			"current rank", i,
+			"name", kvPair.Key.ContainerName,
+			"MemCpuRatio", kvPair.Value.MemCpuRatio.Ratio(),
+			"Memory", kvPair.Value.MaxMemory.Mem,
+			"Cpu", kvPair.Value.MaxMemory.Cpu,
+		)
 	}
-
+	for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnRatio {
+		if i >= SigDepOperator.Spec.DisplayCount {
+			break
+		}
+		logger.Info("Max ratio resource usage",
+			"current rank", i,
+			"name", kvPair.Key.ContainerName,
+			"MemCpuRatio", kvPair.Value.MemCpuRatio.Ratio(),
+			"Memory", kvPair.Value.MemCpuRatio.Mem,
+			"Cpu", kvPair.Value.MemCpuRatio.Cpu,
+		)
+	}
 	return nil
 }
 

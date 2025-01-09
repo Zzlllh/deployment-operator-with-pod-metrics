@@ -11,3 +11,4 @@ spec:
   memoryThreshold: 500Mi
   cpuThreshold: 1m
   emaRatio: "0.5"
+  displayCount: 10

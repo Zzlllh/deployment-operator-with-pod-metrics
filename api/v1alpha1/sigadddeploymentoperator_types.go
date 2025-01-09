@@ -31,7 +31,8 @@ type SigAddDeploymentOperatorSpec struct {
 	MemoryThreshold resource.Quantity `json:"memoryThreshold"`
 	CPUThreshold    resource.Quantity `json:"cpuThreshold"`
 	//ratio for Exponential Moving Average to calculate an approx avg
-	EMARatio string `json:"emaRatio"`
+	EMARatio     string `json:"emaRatio"`
+	DisplayCount int    `json:"displayCount"`
 }
 
 // SigAddDeploymentOperatorStatus defines the observed state of SigAddDeploymentOperator.
@@ -40,6 +41,11 @@ type SigAddDeploymentOperatorStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 	Conditions  []metav1.Condition `json:"conditions,omitempty"`
 	LastUpdated metav1.Time        `json:"lastUpdated,omitempty"`
+}
+
+type IdMetrics struct {
+	Key   ContainerId
+	Value ContainerMetrics
 }
 
 // ContainerMetrics holds the metrics information for a container
@@ -84,11 +90,15 @@ type MemCpuPair struct {
 }
 
 func (pair MemCpuPair) Ratio() float64 {
-	return pair.Mem / pair.Cpu
+	return pair.Mem / (pair.Cpu + 0.001) //add 0.001 to avoid divide by 0
 }
 
 // containerUsage stores containers usage
 var ContainerUsage = make(map[ContainerId]ContainerMetrics)
+
+// key value slice based on different metrics
+var KvSliceBasedOnMem []IdMetrics
+var KvSliceBasedOnRatio []IdMetrics
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
