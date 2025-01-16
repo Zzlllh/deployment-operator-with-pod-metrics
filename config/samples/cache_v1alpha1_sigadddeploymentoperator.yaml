@@ -9,6 +9,6 @@ metadata:
 spec:
   enable: true
   memoryThreshold: 500Mi
-  cpuThreshold: 1m
+  cpuThreshold: 10m
   emaRatio: "0.5"
-  displayCount: 10
+  displayCount: 30
