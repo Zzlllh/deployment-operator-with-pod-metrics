@@ -19,9 +19,11 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"time"
 
 	cachev1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -74,6 +76,7 @@ func SetupWebhookWithManager(mgr ctrl.Manager) error {
 
 // Mutating webhook for deployments
 // +kubebuilder:webhook:path=/mutate-apps-v1-deployment,mutating=true,failurePolicy=fail,sideEffects=None,groups=apps,resources=deployments,verbs=create;update,versions=v1,name=mdeployment.kb.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/mutate-apps-v1-statefulset,mutating=true,failurePolicy=fail,sideEffects=None,groups=apps,resources=statefulsets,verbs=create;update,versions=v1,name=mstatefulset.kb.io,admissionReviewVersions=v1
 
 // SigAddDeploymentOperatorCustomDefaulter struct is responsible for setting default values on the custom resource of the
 // Kind SigAddDeploymentOperator when those are created or updated.
@@ -90,16 +93,41 @@ var _ webhook.CustomDefaulter = &SigAddDeploymentOperatorCustomDefaulter{}
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind SigAddDeploymentOperator.
 func (r *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, obj runtime.Object) error {
 	// Get the resource being mutated
+	var podTemplate *corev1.PodTemplateSpec
 	var resourceMeta metav1.Object
 	var resourceKind string
 
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
+		podTemplate = &v.Spec.Template
 		resourceMeta = v.GetObjectMeta()
 		resourceKind = "Deployment"
+
+		// Add deployment-level annotations
+		if resourceMeta.GetAnnotations() == nil {
+			resourceMeta.SetAnnotations(make(map[string]string))
+		}
+		annotations := resourceMeta.GetAnnotations()
+		annotations["memory.sig.com/managed-by"] = "sig-deployment-operator"
+		annotations["memory.sig.com/resource-modified"] = time.Now().Format(time.RFC3339)
+		annotations["memory.sig.com/memory-configuration"] = "high-memory-profile"
+		resourceMeta.SetAnnotations(annotations)
+
 	case *appsv1.StatefulSet:
+		podTemplate = &v.Spec.Template
 		resourceMeta = v.GetObjectMeta()
 		resourceKind = "StatefulSet"
+
+		// Add statefulset-level annotations
+		if resourceMeta.GetAnnotations() == nil {
+			resourceMeta.SetAnnotations(make(map[string]string))
+		}
+		annotations := resourceMeta.GetAnnotations()
+		annotations["memory.sig.com/managed-by"] = "sig-deployment-operator"
+		annotations["memory.sig.com/resource-modified"] = time.Now().Format(time.RFC3339)
+		annotations["memory.sig.com/memory-configuration"] = "high-memory-profile"
+		resourceMeta.SetAnnotations(annotations)
+
 	default:
 		return nil
 	}
@@ -128,26 +156,205 @@ func (r *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, o
 	}
 
 	// Check if this resource is in PlacedPods
+	inPlacedPods := false
 	for _, placedPod := range sigDepOp.Status.PlacedPods {
 		if placedPod.Namespace == resourceMeta.GetNamespace() &&
 			placedPod.ResourceName == resourceMeta.GetName() &&
 			placedPod.ResourceType == resourceKind {
-			log.Info("PlacedPod found", "namespace", placedPod.Namespace, "resourceName", placedPod.ResourceName, "resourceType", placedPod.ResourceType)
+			inPlacedPods = true
 
-			// Add annotation
-			annotations := resourceMeta.GetAnnotations()
-			if annotations == nil {
-				annotations = make(map[string]string)
+			// Initialize annotations if they don't exist
+			if podTemplate.Annotations == nil {
+				podTemplate.Annotations = make(map[string]string)
 			}
 
-			// Add annotation indicating this resource is managed by the operator
-			annotations["metrics-dep-operator/managed"] = "true"
-			// Add annotation with container name
-			annotations["metrics-dep-operator/container"] = placedPod.ContainerName
+			// Initialize affinity if it doesn't exist
+			if podTemplate.Spec.Affinity == nil {
+				podTemplate.Spec.Affinity = &corev1.Affinity{}
 
-			resourceMeta.SetAnnotations(annotations)
+			}
+
+			// Initialize nodeAffinity if it doesn't exist
+			if podTemplate.Spec.Affinity.NodeAffinity == nil {
+				podTemplate.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+
+			}
+
+			// Initialize PreferredDuringSchedulingIgnoredDuringExecution if it doesn't exist
+			if podTemplate.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution == nil {
+				podTemplate.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution = []corev1.PreferredSchedulingTerm{
+					{
+						Weight: 30,
+						Preference: corev1.NodeSelectorTerm{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      "memory",
+									Operator: corev1.NodeSelectorOpIn,
+									Values:   []string{"high"},
+								},
+							},
+						},
+					},
+				}
+				podTemplate.Annotations["memory.sig.com/last-modified"] = time.Now().Format(time.RFC3339)
+			} else {
+				// Check if our memory preference already exists
+				memoryPreferenceExists := false
+				for _, term := range podTemplate.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
+					for _, expr := range term.Preference.MatchExpressions {
+						if expr.Key == "memory" &&
+							expr.Operator == corev1.NodeSelectorOpIn &&
+							len(expr.Values) == 1 &&
+							expr.Values[0] == "high" {
+							memoryPreferenceExists = true
+							break
+						}
+					}
+					if memoryPreferenceExists {
+						break
+					}
+				}
+
+				// Add our preference if it doesn't exist
+				if !memoryPreferenceExists {
+					podTemplate.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution = append(
+						podTemplate.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution,
+						corev1.PreferredSchedulingTerm{
+							Weight: 30,
+							Preference: corev1.NodeSelectorTerm{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "memory",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"high"},
+									},
+								},
+							},
+						},
+					)
+					podTemplate.Annotations["memory.sig.com/last-modified"] = time.Now().Format(time.RFC3339)
+				}
+			}
+
+			// Continue with existing toleration and preference logic...
+			tolerationExists := false
+			for _, t := range podTemplate.Spec.Tolerations {
+				if t.Key == "memory" &&
+					t.Value == "high" &&
+					t.Effect == corev1.TaintEffectPreferNoSchedule {
+					tolerationExists = true
+					break
+				}
+			}
+
+			if !tolerationExists {
+				podTemplate.Spec.Tolerations = append(podTemplate.Spec.Tolerations, corev1.Toleration{
+					Key:      "memory",
+					Operator: corev1.TolerationOpEqual,
+					Value:    "high",
+					Effect:   corev1.TaintEffectPreferNoSchedule,
+				})
+				log.Info("Added memory toleration",
+					"namespace", placedPod.Namespace,
+					"resourceName", placedPod.ResourceName)
+			}
 			break
 		}
+	}
+
+	// If not in PlacedPods, remove our specific configurations
+	if !inPlacedPods {
+		// Remove resource-level annotations
+		if resourceMeta.GetAnnotations() != nil {
+			annotations := resourceMeta.GetAnnotations()
+			annotationsToRemove := []string{
+				"memory.sig.com/managed-by",
+				"memory.sig.com/resource-modified",
+				"memory.sig.com/memory-configuration",
+			}
+
+			for _, key := range annotationsToRemove {
+				delete(annotations, key)
+			}
+
+			// Add removal timestamp
+			annotations["memory.sig.com/configurations-removed"] = time.Now().Format(time.RFC3339)
+			resourceMeta.SetAnnotations(annotations)
+		}
+
+		// Remove only our specific PreferNoSchedule memory toleration
+		updatedTolerations := []corev1.Toleration{}
+		tolerationRemoved := false
+
+		for _, t := range podTemplate.Spec.Tolerations {
+			if !(t.Key == "memory" &&
+				t.Value == "high" &&
+				t.Effect == corev1.TaintEffectPreferNoSchedule) {
+				updatedTolerations = append(updatedTolerations, t)
+			} else {
+				tolerationRemoved = true
+			}
+		}
+
+		if tolerationRemoved {
+			podTemplate.Spec.Tolerations = updatedTolerations
+		}
+
+		// Remove our specific node affinity preference
+		if podTemplate.Spec.Affinity != nil &&
+			podTemplate.Spec.Affinity.NodeAffinity != nil &&
+			podTemplate.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution != nil {
+
+			updatedPreferences := []corev1.PreferredSchedulingTerm{}
+			affinityRemoved := false
+
+			for _, term := range podTemplate.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
+				// Keep preferences that don't match our specific memory configuration
+				isOurMemoryPreference := false
+				for _, expr := range term.Preference.MatchExpressions {
+					if expr.Key == "memory" &&
+						expr.Operator == corev1.NodeSelectorOpIn &&
+						len(expr.Values) == 1 &&
+						expr.Values[0] == "high" {
+						isOurMemoryPreference = true
+						break
+					}
+				}
+				if !isOurMemoryPreference {
+					updatedPreferences = append(updatedPreferences, term)
+				} else {
+					affinityRemoved = true
+				}
+			}
+
+			if affinityRemoved {
+				podTemplate.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution = updatedPreferences
+			}
+		}
+
+		// Remove our specific annotations
+		if podTemplate.Annotations != nil {
+			// List of our annotation prefixes to remove
+			annotationsToRemove := []string{
+				"memory.sig.com/modified-by",
+				"memory.sig.com/last-modified",
+				"memory.sig.com/memory-profile",
+				"memory.sig.com/toleration-added",
+				"memory.sig.com/prefer-toleration-removed",
+			}
+
+			for _, key := range annotationsToRemove {
+				delete(podTemplate.Annotations, key)
+			}
+
+			// Add removal timestamp
+			podTemplate.Annotations["memory.sig.com/configurations-removed"] = time.Now().Format(time.RFC3339)
+		}
+
+		log.Info("Removed memory-related configurations",
+			"namespace", resourceMeta.GetNamespace(),
+			"resourceName", resourceMeta.GetName(),
+			"resourceType", resourceKind)
 	}
 
 	return nil
