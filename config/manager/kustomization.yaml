@@ -4,5 +4,5 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
 - name: controller
-  newName: 893344630391.dkr.ecr.eu-central-1.amazonaws.com/sig-dep-operator
-  newTag: 0.4.3
+  newName: 718790045195.dkr.ecr.cn-northwest-1.amazonaws.com.cn/sig-dep-operator
+  newTag: 0.6.7

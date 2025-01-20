@@ -22,7 +22,7 @@ import (
 
 	cachev1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,11 +46,28 @@ func SetupSigAddDeploymentOperatorWebhookWithManager(mgr ctrl.Manager) error {
 		Complete()
 }
 
-func SetupDeploymentWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
+func SetupWebhookWithManager(mgr ctrl.Manager) error {
+	defaulter := &SigAddDeploymentOperatorCustomDefaulter{
+		Client: mgr.GetClient(),
+	}
+
+	// Setup webhook for Deployment
+	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&appsv1.Deployment{}).
-		WithDefaulter(&SigAddDeploymentOperatorCustomDefaulter{}). // We already have this defaulter
-		Complete()
+		WithDefaulter(defaulter).
+		Complete(); err != nil {
+		return err
+	}
+
+	// Setup webhook for StatefulSet
+	if err := ctrl.NewWebhookManagedBy(mgr).
+		For(&appsv1.StatefulSet{}).
+		WithDefaulter(defaulter).
+		Complete(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -63,52 +80,73 @@ func SetupDeploymentWebhookWithManager(mgr ctrl.Manager) error {
 //
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as it is used only for temporary operations and does not need to be deeply copied.
+// +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators,verbs=get;list;watch
 type SigAddDeploymentOperatorCustomDefaulter struct {
-	// TODO(user): Add more fields as needed for defaulting
+	Client client.Client
 }
 
 var _ webhook.CustomDefaulter = &SigAddDeploymentOperatorCustomDefaulter{}
 
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind SigAddDeploymentOperator.
-func (d *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, obj runtime.Object) error {
-	deployment, ok := obj.(*appsv1.Deployment)
-	if !ok {
-		return fmt.Errorf("expected a Deployment but got %T", obj)
+func (r *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, obj runtime.Object) error {
+	// Get the resource being mutated
+	var resourceMeta metav1.Object
+	var resourceKind string
+
+	switch v := obj.(type) {
+	case *appsv1.Deployment:
+		resourceMeta = v.GetObjectMeta()
+		resourceKind = "Deployment"
+	case *appsv1.StatefulSet:
+		resourceMeta = v.GetObjectMeta()
+		resourceKind = "StatefulSet"
+	default:
+		return nil
 	}
-	sigadddeploymentoperatorlog.Info("Defaulting for Deployment", "name", deployment.GetName())
 
-	// Check if deployment name is "test123"
-	if deployment.GetName() == "test123" {
-		// Set replicas to 2
-		replicas := int32(2)
-		deployment.Spec.Replicas = &replicas
+	log := ctrl.Log.WithName("webhook")
 
-		// Add annotation
-		if deployment.Annotations == nil {
-			deployment.Annotations = make(map[string]string)
-		}
-		deployment.Annotations["test"] = "working"
+	// Get the single SigAddDeploymentOperator instance
+	sigDepOpList := &cachev1alpha1.SigAddDeploymentOperatorList{}
+	if err := r.Client.List(ctx, sigDepOpList, client.Limit(1)); err != nil {
+		log.Error(err, "Failed to list SigAddDeploymentOperator")
+		// If we can't get the CR, skip mutation
+		return nil
+	}
 
-		// Add node affinity
-		if deployment.Spec.Template.Spec.Affinity == nil {
-			deployment.Spec.Template.Spec.Affinity = &corev1.Affinity{}
-		}
+	// Since we enforce single instance via validation webhook,
+	// we can safely check the first (and only) item
+	if len(sigDepOpList.Items) == 0 {
+		log.Info("No SigAddDeploymentOperator instance found")
+		return nil
+	}
 
-		deployment.Spec.Template.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{
-			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{
-				{
-					Weight: 100,
-					Preference: corev1.NodeSelectorTerm{
-						MatchExpressions: []corev1.NodeSelectorRequirement{
-							{
-								Key:      "memory",
-								Operator: corev1.NodeSelectorOpIn,
-								Values:   []string{"high"},
-							},
-						},
-					},
-				},
-			},
+	sigDepOp := &sigDepOpList.Items[0]
+	// Check if operator is enabled
+	if !sigDepOp.Spec.Enable {
+		return nil
+	}
+
+	// Check if this resource is in PlacedPods
+	for _, placedPod := range sigDepOp.Status.PlacedPods {
+		if placedPod.Namespace == resourceMeta.GetNamespace() &&
+			placedPod.ResourceName == resourceMeta.GetName() &&
+			placedPod.ResourceType == resourceKind {
+			log.Info("PlacedPod found", "namespace", placedPod.Namespace, "resourceName", placedPod.ResourceName, "resourceType", placedPod.ResourceType)
+
+			// Add annotation
+			annotations := resourceMeta.GetAnnotations()
+			if annotations == nil {
+				annotations = make(map[string]string)
+			}
+
+			// Add annotation indicating this resource is managed by the operator
+			annotations["metrics-dep-operator/managed"] = "true"
+			// Add annotation with container name
+			annotations["metrics-dep-operator/container"] = placedPod.ContainerName
+
+			resourceMeta.SetAnnotations(annotations)
+			break
 		}
 	}
 

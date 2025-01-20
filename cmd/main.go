@@ -166,7 +166,7 @@ func main() {
 			setupLog.Error(err, "unable to create webhook", "webhook", "SigAddDeploymentOperator")
 			os.Exit(1)
 		}
-		if err := webhookcachev1alpha1.SetupDeploymentWebhookWithManager(mgr); err != nil {
+		if err := webhookcachev1alpha1.SetupWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Deployment")
 			os.Exit(1)
 		}

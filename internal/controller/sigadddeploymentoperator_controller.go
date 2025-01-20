@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"sync"
@@ -47,6 +46,7 @@ import (
 	_ "sigs.k8s.io/controller-runtime/pkg/source"
 
 	sigDepOpv1alpha1 "github.com/Zzlllh/deployment-operator-with-pod-metrics/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Previous threshold values for comparison
@@ -82,6 +82,9 @@ type SigAddDeploymentOperatorReconciler struct {
 
 // Add StatefulSet RBAC permission
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;update;patch
+
+// Add ReplicaSet RBAC permission
+// +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 
 func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
@@ -125,14 +128,15 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 	}
 
 	// Get current thresholds
-	currentMemoryThreshold := SigDepOperator.Spec.MemoryThreshold.AsApproximateFloat64() / 1000 / 1000 / 1000
-	currentCPUThreshold := SigDepOperator.Spec.CPUThreshold.AsApproximateFloat64()
+	currentMemoryThreshold := float64(SigDepOperator.Spec.MemoryThresholdForContainer.Value()) / (1024 * 1024 * 1024)
+	currentCPUThreshold := float64(SigDepOperator.Spec.CPUThresholdForContainer.MilliValue()) / 1000
 
 	currentEMARatio, err := strconv.ParseFloat(SigDepOperator.Spec.EMARatio, 64)
-	if err != nil || math.Abs(currentEMARatio) >= 1 {
-		// Handle parsing error
-		fmt.Println("Error parsing string to float64:", err)
-		return err
+	if err != nil {
+		return fmt.Errorf("error parsing EMARatio to float64: %v", err)
+	}
+	if currentEMARatio < 0 || currentEMARatio > 1 {
+		return fmt.Errorf("EMARatio must be between 0 and 1, got %v", currentEMARatio)
 	}
 
 	// Check if either threshold has changed
@@ -280,59 +284,37 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 	// 	)
 	// }
 
-	// For memory-sorted slice
 	memSum := 0.0
 	cpuSum := 0.0
-	sigDepOpv1alpha1.PlacedPods = make(map[string]struct{})
+	placedPods := []sigDepOpv1alpha1.ContainerId{}
+	seenContainers := make(map[string]struct{}) // for deduplication
 	uniquePodsCount := 0
-	logger.Info("Resource usage under 60GB memory and 7.5 CPU (sorted by max memory):")
-	for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnMem {
-		// Skip if container name already seen
-		if _, exists := sigDepOpv1alpha1.PlacedPods[kvPair.Key.ContainerName]; exists {
-			continue
-		}
 
-		// Check if adding this container would exceed either threshold
-		if memSum+kvPair.Value.MaxMemory.Mem > 58.0 || cpuSum+kvPair.Value.MaxCPU.Cpu > 7.5 {
-			continue // Skip this container and check next one
-		}
+	// Convert resource.Quantity to float64
+	memoryLimit := float64(SigDepOperator.Spec.MemoryLimitForNode.Value()) / (1024 * 1024 * 1024) // Convert to GB
+	cpuLimit := float64(SigDepOperator.Spec.CPULimitForNode.MilliValue()) / 1000.0                // Convert millicores to cores
 
-		sigDepOpv1alpha1.PlacedPods[kvPair.Key.ContainerName] = struct{}{}
-		uniquePodsCount++
-
-		memSum += kvPair.Value.MaxMemory.Mem
-		cpuSum += kvPair.Value.MaxCPU.Cpu
-		logger.Info("Pod composition from mem",
-			"current rank", i,
-			"container", kvPair.Key.ContainerName,
-			"pod", kvPair.Key.PodName,
-			"memory_GB", kvPair.Value.MaxMemory.Mem,
-			"cpu_cores", kvPair.Value.MaxCPU.Cpu,
-		)
-	}
-	logger.Info("Final totals (memory-sorted)",
-		"final_memory_GB", memSum,
-		"final_cpu_cores", cpuSum,
-		"pods_counted", uniquePodsCount)
-
-	// For ratio-sorted slice
-	memSum = 0.0
-	cpuSum = 0.0
-	sigDepOpv1alpha1.PlacedPods = make(map[string]struct{})
-	uniquePodsCount = 0
-	logger.Info("Resource usage under 60GB memory and 7.5 CPU (sorted by ratio):")
+	logger.Info("Resource usage under specified thresholds (sorted by ratio):")
 	for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnRatio {
-		// Skip if container name already seen
-		if _, exists := sigDepOpv1alpha1.PlacedPods[kvPair.Key.ContainerName]; exists {
+		// Create unique key for this container
+		uniqueKey := fmt.Sprintf("%s/%s/%s",
+			kvPair.Key.Namespace,
+			kvPair.Key.ResourceName,
+			kvPair.Key.ContainerName)
+
+		// Skip if we've already seen this container
+		if _, exists := seenContainers[uniqueKey]; exists {
 			continue
 		}
 
 		// Check if adding this container would exceed either threshold
-		if memSum+kvPair.Value.MaxMemory.Mem > 58.0 || cpuSum+kvPair.Value.MaxCPU.Cpu > 7.5 {
+		if memSum+kvPair.Value.MaxMemory.Mem > memoryLimit || cpuSum+kvPair.Value.MaxCPU.Cpu > cpuLimit {
 			continue // Skip this container and check next one
 		}
 
-		sigDepOpv1alpha1.PlacedPods[kvPair.Key.ContainerName] = struct{}{}
+		// Add to tracking map and append to slice
+		seenContainers[uniqueKey] = struct{}{}
+		placedPods = append(placedPods, kvPair.Key)
 		uniquePodsCount++
 
 		memSum += kvPair.Value.MaxMemory.Mem
@@ -343,20 +325,47 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 			"pod", kvPair.Key.PodName,
 			"memory_GB", kvPair.Value.MaxMemory.Mem,
 			"cpu_cores", kvPair.Value.MaxCPU.Cpu,
-			"running_memory_total", memSum,
-			"running_cpu_total", cpuSum,
 		)
 	}
+
 	logger.Info("Final totals (ratio-sorted)",
+		"memory_limit_GB", memoryLimit,
+		"cpu_limit_cores", cpuLimit,
 		"final_memory_GB", memSum,
 		"final_cpu_cores", cpuSum,
 		"pods_counted", uniquePodsCount)
+
+	// Update status with placed pods
+	SigDepOperator.Status.PlacedPods = placedPods
+	if err := r.Status().Update(ctx, SigDepOperator); err != nil {
+		return fmt.Errorf("failed to update SigAddDeploymentOperator status: %v", err)
+	}
+
 	return nil
 }
 
 // Extract pod processing logic to avoid duplication
 func (r *SigAddDeploymentOperatorReconciler) processPods(ctx context.Context, log logr.Logger, pods []corev1.Pod, podSet map[sigDepOpv1alpha1.ContainerId]struct{}, memoryThreshold, cpuThreshold, emaRatio float64) error {
 	for _, pod := range pods {
+		// Get resource type and name from owner references
+		resourceType, resourceName := "", ""
+		if len(pod.OwnerReferences) > 0 {
+			owner := pod.OwnerReferences[0]
+			if owner.Kind == "ReplicaSet" {
+				// Look up the ReplicaSet to find its owner Deployment
+				var rs appsv1.ReplicaSet
+				if err := r.Get(ctx, types.NamespacedName{Name: owner.Name, Namespace: pod.Namespace}, &rs); err == nil {
+					if len(rs.OwnerReferences) > 0 && rs.OwnerReferences[0].Kind == "Deployment" {
+						resourceType = "Deployment"
+						resourceName = rs.OwnerReferences[0].Name
+					}
+				}
+			} else if owner.Kind == "StatefulSet" {
+				resourceType = "StatefulSet"
+				resourceName = owner.Name
+			}
+		}
+
 		// Skip pods that aren't running
 		if pod.Status.Phase != corev1.PodRunning {
 			continue
@@ -387,6 +396,8 @@ func (r *SigAddDeploymentOperatorReconciler) processPods(ctx context.Context, lo
 				ContainerName: container.Name,
 				PodName:       pod.Name,
 				Namespace:     pod.Namespace,
+				ResourceType:  resourceType,
+				ResourceName:  resourceName,
 			}
 
 			// Thread-safe podSet update

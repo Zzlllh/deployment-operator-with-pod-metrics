@@ -41,7 +41,14 @@ spec:
             description: SigAddDeploymentOperatorSpec defines the desired state of
               SigAddDeploymentOperator.
             properties:
-              cpuThreshold:
+              cpuLimitForNode:
+                anyOf:
+                - type: integer
+                - type: string
+                description: CPULimit specifies the CPU threshold for pod placement
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              cpuThresholdForContainer:
                 anyOf:
                 - type: integer
                 - type: string
@@ -55,7 +62,14 @@ spec:
                 type: string
               enable:
                 type: boolean
-              memoryThreshold:
+              memoryLimitForNode:
+                anyOf:
+                - type: integer
+                - type: string
+                description: MemoryLimit specifies the memory threshold for pod placement
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              memoryThresholdForContainer:
                 anyOf:
                 - type: integer
                 - type: string
@@ -64,11 +78,13 @@ spec:
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
             required:
-            - cpuThreshold
+            - cpuLimitForNode
+            - cpuThresholdForContainer
             - displayCount
             - emaRatio
             - enable
-            - memoryThreshold
+            - memoryLimitForNode
+            - memoryThresholdForContainer
             type: object
           status:
             description: SigAddDeploymentOperatorStatus defines the observed state
@@ -136,6 +152,30 @@ spec:
               lastUpdated:
                 format: date-time
                 type: string
+              placedPods:
+                description: |-
+                  PlacedPods tracks the pods that have been placed
+                  Key is namespace, value is map of resource name to containerName
+                items:
+                  properties:
+                    containerName:
+                      type: string
+                    namespace:
+                      type: string
+                    podName:
+                      type: string
+                    resourceName:
+                      type: string
+                    resourceType:
+                      type: string
+                  required:
+                  - containerName
+                  - namespace
+                  - podName
+                  - resourceName
+                  - resourceType
+                  type: object
+                type: array
             type: object
         type: object
     served: true

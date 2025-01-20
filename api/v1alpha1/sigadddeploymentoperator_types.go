@@ -28,11 +28,17 @@ type SigAddDeploymentOperatorSpec struct {
 
 	Enable bool `json:"enable"`
 	// MemoryThreshold specifies the memory threshold value that triggers the operator
-	MemoryThreshold resource.Quantity `json:"memoryThreshold"`
-	CPUThreshold    resource.Quantity `json:"cpuThreshold"`
+	MemoryThresholdForContainer resource.Quantity `json:"memoryThresholdForContainer"`
+	CPUThresholdForContainer    resource.Quantity `json:"cpuThresholdForContainer"`
 	//ratio for Exponential Moving Average to calculate an approx avg
 	EMARatio     string `json:"emaRatio"`
 	DisplayCount int    `json:"displayCount"`
+	// MemoryLimit specifies the memory threshold for pod placement
+	// +kubebuilder:validation:Required
+	MemoryLimitForNode resource.Quantity `json:"memoryLimitForNode"`
+	// CPULimit specifies the CPU threshold for pod placement
+	// +kubebuilder:validation:Required
+	CPULimitForNode resource.Quantity `json:"cpuLimitForNode"`
 }
 
 // SigAddDeploymentOperatorStatus defines the observed state of SigAddDeploymentOperator.
@@ -41,6 +47,10 @@ type SigAddDeploymentOperatorStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 	Conditions  []metav1.Condition `json:"conditions,omitempty"`
 	LastUpdated metav1.Time        `json:"lastUpdated,omitempty"`
+	// PlacedPods tracks the pods that have been placed
+	// Key is namespace, value is map of resource name to containerName
+	// +optional
+	PlacedPods []ContainerId `json:"placedPods,omitempty"`
 }
 
 type IdMetrics struct {
@@ -78,13 +88,12 @@ func (m *ContainerMetrics) CalculateEMA(other ContainerMetrics, ratio float64) {
 	m.EMAMemCPURatio = other.MemCpuRatio.Ratio()*float64(ratio) + (1.0-ratio)*m.EMAMemCPURatio
 }
 
-// SeenContainers is a map to store containers that have been seen
-var PlacedPods = make(map[string]struct{})
-
 type ContainerId struct {
 	ContainerName string `json:"containerName"`
 	PodName       string `json:"podName"`
 	Namespace     string `json:"namespace"`
+	ResourceName  string `json:"resourceName"`
+	ResourceType  string `json:"resourceType"`
 }
 
 type MemCpuPair struct {
