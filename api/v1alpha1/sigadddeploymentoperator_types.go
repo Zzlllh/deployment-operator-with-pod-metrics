@@ -78,6 +78,9 @@ func (m *ContainerMetrics) CalculateEMA(other ContainerMetrics, ratio float64) {
 	m.EMAMemCPURatio = other.MemCpuRatio.Ratio()*float64(ratio) + (1.0-ratio)*m.EMAMemCPURatio
 }
 
+// SeenContainers is a map to store containers that have been seen
+var PlacedPods = make(map[string]struct{})
+
 type ContainerId struct {
 	ContainerName string `json:"containerName"`
 	PodName       string `json:"podName"`

@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -36,8 +37,11 @@ var sigadddeploymentoperatorlog = logf.Log.WithName("sigadddeploymentoperator-re
 
 // SetupSigAddDeploymentOperatorWebhookWithManager registers the webhook for SigAddDeploymentOperator in the manager.
 func SetupSigAddDeploymentOperatorWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).For(&cachev1alpha1.SigAddDeploymentOperator{}).
-		WithValidator(&SigAddDeploymentOperatorCustomValidator{}).
+	return ctrl.NewWebhookManagedBy(mgr).
+		For(&cachev1alpha1.SigAddDeploymentOperator{}).
+		WithValidator(&SigAddDeploymentOperatorCustomValidator{
+			Client: mgr.GetClient(),
+		}).
 		WithDefaulter(&SigAddDeploymentOperatorCustomDefaulter{}).
 		Complete()
 }
@@ -120,7 +124,7 @@ func (d *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, o
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type SigAddDeploymentOperatorCustomValidator struct {
-	//TODO(user): Add more fields as needed for validation
+	Client client.Client
 }
 
 var _ webhook.CustomValidator = &SigAddDeploymentOperatorCustomValidator{}
@@ -133,7 +137,16 @@ func (v *SigAddDeploymentOperatorCustomValidator) ValidateCreate(ctx context.Con
 	}
 	sigadddeploymentoperatorlog.Info("Validation for SigAddDeploymentOperator upon creation", "name", sigadddeploymentoperator.GetName())
 
-	// TODO(user): fill in your validation logic upon object creation.
+	// Get the list of existing SigAddDeploymentOperator instances
+	existingList := &cachev1alpha1.SigAddDeploymentOperatorList{}
+	if err := v.Client.List(ctx, existingList); err != nil {
+		return nil, fmt.Errorf("failed to check existing instances: %v", err)
+	}
+
+	// If any instances exist, reject the creation
+	if len(existingList.Items) > 0 {
+		return nil, fmt.Errorf("only one instance of SigAddDeploymentOperator is allowed, found existing instance: %s", existingList.Items[0].Name)
+	}
 
 	return nil, nil
 }

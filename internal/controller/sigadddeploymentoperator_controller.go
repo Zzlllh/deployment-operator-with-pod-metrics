@@ -249,37 +249,108 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 
 	// Log the high usage containers with clean output
 
-	for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnMem {
-		if i >= SigDepOperator.Spec.DisplayCount {
-			break
-		}
-		logger.Info("Max memory resource usage",
-			"current rank", i,
-			"name", kvPair.Key.ContainerName,
-			"MemCpuRatio", kvPair.Value.MemCpuRatio.Ratio(),
-			"maxmem_Memory", kvPair.Value.MaxMemory.Mem,
-			"maxmem_Cpu", kvPair.Value.MaxMemory.Cpu,
-			"maxcpu_Memory", kvPair.Value.MaxCPU.Mem,
-			"maxcpu_Cpu", kvPair.Value.MaxCPU.Cpu,
-			"EMA", kvPair.Value.EMAMemCPURatio,
-		)
-	}
-	for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnRatio {
-		if i >= SigDepOperator.Spec.DisplayCount {
-			break
-		}
-		logger.Info("Max ratio resource usage",
-			"current rank", i,
-			"name", kvPair.Key.ContainerName,
-			"MemCpuRatio", kvPair.Value.MemCpuRatio.Ratio(),
-			"maxmem_Memory", kvPair.Value.MaxMemory.Mem,
-			"maxmem_Cpu", kvPair.Value.MaxMemory.Cpu,
-			"maxcpu_Memory", kvPair.Value.MaxCPU.Mem,
-			"maxcpu_Cpu", kvPair.Value.MaxCPU.Cpu,
-			"EMA", kvPair.Value.EMAMemCPURatio,
-		)
-	}
+	// for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnMem {
+	// 	if i >= SigDepOperator.Spec.DisplayCount {
+	// 		break
+	// 	}
+	// 	logger.Info("Max memory resource usage",
+	// 		"current rank", i,
+	// 		"name", kvPair.Key.ContainerName,
+	// 		"MemCpuRatio", kvPair.Value.MemCpuRatio.Ratio(),
+	// 		"maxmem_Memory", kvPair.Value.MaxMemory.Mem,
+	// 		"maxmem_Cpu", kvPair.Value.MaxMemory.Cpu,
+	// 		"maxcpu_Memory", kvPair.Value.MaxCPU.Mem,
+	// 		"maxcpu_Cpu", kvPair.Value.MaxCPU.Cpu,
+	// 		"EMA", kvPair.Value.EMAMemCPURatio,
+	// 	)
+	// }
+	// for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnRatio {
+	// 	if i >= SigDepOperator.Spec.DisplayCount {
+	// 		break
+	// 	}
+	// 	logger.Info("Max ratio resource usage",
+	// 		"current rank", i,
+	// 		"name", kvPair.Key.ContainerName,
+	// 		"MemCpuRatio", kvPair.Value.MemCpuRatio.Ratio(),
+	// 		"maxmem_Memory", kvPair.Value.MaxMemory.Mem,
+	// 		"maxmem_Cpu", kvPair.Value.MaxMemory.Cpu,
+	// 		"maxcpu_Memory", kvPair.Value.MaxCPU.Mem,
+	// 		"maxcpu_Cpu", kvPair.Value.MaxCPU.Cpu,
+	// 		"EMA", kvPair.Value.EMAMemCPURatio,
+	// 	)
+	// }
 
+	// For memory-sorted slice
+	memSum := 0.0
+	cpuSum := 0.0
+	sigDepOpv1alpha1.PlacedPods = make(map[string]struct{})
+	uniquePodsCount := 0
+	logger.Info("Resource usage under 60GB memory and 7.5 CPU (sorted by max memory):")
+	for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnMem {
+		// Skip if container name already seen
+		if _, exists := sigDepOpv1alpha1.PlacedPods[kvPair.Key.ContainerName]; exists {
+			continue
+		}
+
+		// Check if adding this container would exceed either threshold
+		if memSum+kvPair.Value.MaxMemory.Mem > 58.0 || cpuSum+kvPair.Value.MaxCPU.Cpu > 7.5 {
+			continue // Skip this container and check next one
+		}
+
+		sigDepOpv1alpha1.PlacedPods[kvPair.Key.ContainerName] = struct{}{}
+		uniquePodsCount++
+
+		memSum += kvPair.Value.MaxMemory.Mem
+		cpuSum += kvPair.Value.MaxCPU.Cpu
+		logger.Info("Pod composition from mem",
+			"current rank", i,
+			"container", kvPair.Key.ContainerName,
+			"pod", kvPair.Key.PodName,
+			"memory_GB", kvPair.Value.MaxMemory.Mem,
+			"cpu_cores", kvPair.Value.MaxCPU.Cpu,
+		)
+	}
+	logger.Info("Final totals (memory-sorted)",
+		"final_memory_GB", memSum,
+		"final_cpu_cores", cpuSum,
+		"pods_counted", uniquePodsCount)
+
+	// For ratio-sorted slice
+	memSum = 0.0
+	cpuSum = 0.0
+	sigDepOpv1alpha1.PlacedPods = make(map[string]struct{})
+	uniquePodsCount = 0
+	logger.Info("Resource usage under 60GB memory and 7.5 CPU (sorted by ratio):")
+	for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnRatio {
+		// Skip if container name already seen
+		if _, exists := sigDepOpv1alpha1.PlacedPods[kvPair.Key.ContainerName]; exists {
+			continue
+		}
+
+		// Check if adding this container would exceed either threshold
+		if memSum+kvPair.Value.MaxMemory.Mem > 58.0 || cpuSum+kvPair.Value.MaxCPU.Cpu > 7.5 {
+			continue // Skip this container and check next one
+		}
+
+		sigDepOpv1alpha1.PlacedPods[kvPair.Key.ContainerName] = struct{}{}
+		uniquePodsCount++
+
+		memSum += kvPair.Value.MaxMemory.Mem
+		cpuSum += kvPair.Value.MaxCPU.Cpu
+		logger.Info("Pod composition from ratio",
+			"current rank", i,
+			"container", kvPair.Key.ContainerName,
+			"pod", kvPair.Key.PodName,
+			"memory_GB", kvPair.Value.MaxMemory.Mem,
+			"cpu_cores", kvPair.Value.MaxCPU.Cpu,
+			"running_memory_total", memSum,
+			"running_cpu_total", cpuSum,
+		)
+	}
+	logger.Info("Final totals (ratio-sorted)",
+		"final_memory_GB", memSum,
+		"final_cpu_cores", cpuSum,
+		"pods_counted", uniquePodsCount)
 	return nil
 }
 
