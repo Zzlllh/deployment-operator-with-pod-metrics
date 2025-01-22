@@ -92,45 +92,6 @@ var _ webhook.CustomDefaulter = &SigAddDeploymentOperatorCustomDefaulter{}
 
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind SigAddDeploymentOperator.
 func (r *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, obj runtime.Object) error {
-	// Get the resource being mutated
-	var podTemplate *corev1.PodTemplateSpec
-	var resourceMeta metav1.Object
-	var resourceKind string
-
-	switch v := obj.(type) {
-	case *appsv1.Deployment:
-		podTemplate = &v.Spec.Template
-		resourceMeta = v.GetObjectMeta()
-		resourceKind = "Deployment"
-
-		// Add deployment-level annotations
-		if resourceMeta.GetAnnotations() == nil {
-			resourceMeta.SetAnnotations(make(map[string]string))
-		}
-		annotations := resourceMeta.GetAnnotations()
-		annotations["memory.sig.com/managed-by"] = "sig-deployment-operator"
-		annotations["memory.sig.com/resource-modified"] = time.Now().Format(time.RFC3339)
-		annotations["memory.sig.com/memory-configuration"] = "high-memory-profile"
-		resourceMeta.SetAnnotations(annotations)
-
-	case *appsv1.StatefulSet:
-		podTemplate = &v.Spec.Template
-		resourceMeta = v.GetObjectMeta()
-		resourceKind = "StatefulSet"
-
-		// Add statefulset-level annotations
-		if resourceMeta.GetAnnotations() == nil {
-			resourceMeta.SetAnnotations(make(map[string]string))
-		}
-		annotations := resourceMeta.GetAnnotations()
-		annotations["memory.sig.com/managed-by"] = "sig-deployment-operator"
-		annotations["memory.sig.com/resource-modified"] = time.Now().Format(time.RFC3339)
-		annotations["memory.sig.com/memory-configuration"] = "high-memory-profile"
-		resourceMeta.SetAnnotations(annotations)
-
-	default:
-		return nil
-	}
 
 	log := ctrl.Log.WithName("webhook")
 
@@ -152,6 +113,28 @@ func (r *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, o
 	sigDepOp := &sigDepOpList.Items[0]
 	// Check if operator is enabled
 	if !sigDepOp.Spec.Enable {
+		return nil
+	}
+
+	// Get the resource being mutated
+	var podTemplate *corev1.PodTemplateSpec
+	var resourceMeta metav1.Object
+	var resourceKind string
+
+	switch v := obj.(type) {
+	case *appsv1.Deployment:
+		podTemplate = &v.Spec.Template
+		resourceMeta = v.GetObjectMeta()
+		resourceKind = "Deployment"
+		setResourceAnnotations(resourceMeta, resourceKind)
+
+	case *appsv1.StatefulSet:
+		podTemplate = &v.Spec.Template
+		resourceMeta = v.GetObjectMeta()
+		resourceKind = "StatefulSet"
+		setResourceAnnotations(resourceMeta, resourceKind)
+
+	default:
 		return nil
 	}
 
@@ -358,6 +341,20 @@ func (r *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, o
 	}
 
 	return nil
+}
+
+// setResourceAnnotations adds memory-related annotations to the given resource metadata
+func setResourceAnnotations(resourceMeta metav1.Object, resourceKind string) {
+	// Initialize annotations map if nil
+	if resourceMeta.GetAnnotations() == nil {
+		resourceMeta.SetAnnotations(make(map[string]string))
+	}
+
+	annotations := resourceMeta.GetAnnotations()
+	annotations["memory.sig.com/managed-by"] = "sig-deployment-operator"
+	annotations["memory.sig.com/resource-modified"] = time.Now().Format(time.RFC3339)
+	annotations["memory.sig.com/memory-configuration"] = "high-memory-profile"
+	resourceMeta.SetAnnotations(annotations)
 }
 
 // Validation webhook for our CRD

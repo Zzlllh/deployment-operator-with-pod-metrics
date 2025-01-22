@@ -89,6 +89,13 @@ type SigAddDeploymentOperatorReconciler struct {
 func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
+	// Log reconciliation trigger
+	logger.Info("Reconciliation triggered",
+		"namespace", req.Namespace,
+		"name", req.Name,
+		"timestamp", time.Now().Format(time.RFC3339),
+		"trigger_type", determineTriggerType(ctx))
+
 	SigDepOperator := &sigDepOpv1alpha1.SigAddDeploymentOperator{}
 	err := r.Get(ctx, req.NamespacedName, SigDepOperator)
 	if err != nil {
@@ -111,6 +118,14 @@ func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req 
 
 	// Requeue after 1 minute for continuous monitoring
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
+}
+
+// Add this helper function
+func determineTriggerType(ctx context.Context) string {
+	if requeueTime, ok := ctx.Value("requeue_time").(time.Time); ok {
+		return fmt.Sprintf("Requeue (scheduled at %v)", requeueTime.Format(time.RFC3339))
+	}
+	return "Resource change"
 }
 
 // Rename function to reflect expanded scope
@@ -368,6 +383,16 @@ func (r *SigAddDeploymentOperatorReconciler) processPods(ctx context.Context, lo
 
 		// Skip pods that aren't running
 		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+
+		// Skip pods younger than 10 minutes
+		if time.Since(pod.CreationTimestamp.Time) < 10*time.Minute {
+			logger.Info("Skipping young pod",
+				"namespace", pod.Namespace,
+				"pod", pod.Name,
+				"age", time.Since(pod.CreationTimestamp.Time).String(),
+				"creation_time", pod.CreationTimestamp.Time)
 			continue
 		}
 
