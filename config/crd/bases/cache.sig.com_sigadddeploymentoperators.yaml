@@ -48,7 +48,7 @@ spec:
                 description: CPULimit specifies the CPU threshold for pod placement
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
-              cpuThresholdForContainer:
+              cpuThresholdForPod:
                 anyOf:
                 - type: integer
                 - type: string
@@ -69,7 +69,7 @@ spec:
                 description: MemoryLimit specifies the memory threshold for pod placement
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
-              memoryThresholdForContainer:
+              memoryThresholdForPod:
                 anyOf:
                 - type: integer
                 - type: string
@@ -79,12 +79,12 @@ spec:
                 x-kubernetes-int-or-string: true
             required:
             - cpuLimitForNode
-            - cpuThresholdForContainer
+            - cpuThresholdForPod
             - displayCount
             - emaRatio
             - enable
             - memoryLimitForNode
-            - memoryThresholdForContainer
+            - memoryThresholdForPod
             type: object
           status:
             description: SigAddDeploymentOperatorStatus defines the observed state
@@ -153,13 +153,9 @@ spec:
                 format: date-time
                 type: string
               placedPods:
-                description: |-
-                  PlacedPods tracks the pods that have been placed
-                  Key is namespace, value is map of resource name to containerName
+                description: PlacedPods tracks the pods that have been placed
                 items:
                   properties:
-                    containerName:
-                      type: string
                     namespace:
                       type: string
                     podName:
@@ -169,7 +165,6 @@ spec:
                     resourceType:
                       type: string
                   required:
-                  - containerName
                   - namespace
                   - podName
                   - resourceName

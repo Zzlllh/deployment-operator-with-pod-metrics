@@ -28,8 +28,8 @@ type SigAddDeploymentOperatorSpec struct {
 
 	Enable bool `json:"enable"`
 	// MemoryThreshold specifies the memory threshold value that triggers the operator
-	MemoryThresholdForContainer resource.Quantity `json:"memoryThresholdForContainer"`
-	CPUThresholdForContainer    resource.Quantity `json:"cpuThresholdForContainer"`
+	MemoryThresholdForPod resource.Quantity `json:"memoryThresholdForPod"`
+	CPUThresholdForPod    resource.Quantity `json:"cpuThresholdForPod"`
 	//ratio for Exponential Moving Average to calculate an approx avg
 	EMARatio     string `json:"emaRatio"`
 	DisplayCount int    `json:"displayCount"`
@@ -48,19 +48,17 @@ type SigAddDeploymentOperatorStatus struct {
 	Conditions  []metav1.Condition `json:"conditions,omitempty"`
 	LastUpdated metav1.Time        `json:"lastUpdated,omitempty"`
 	// PlacedPods tracks the pods that have been placed
-	// Key is namespace, value is map of resource name to containerName
 	// +optional
-	PlacedPods []ContainerId `json:"placedPods,omitempty"`
+	PlacedPods []PodId `json:"placedPods,omitempty"`
 }
 
 type IdMetrics struct {
-	Key   ContainerId
-	Value ContainerMetrics
+	Key   PodId
+	Value PodMetrics
 }
 
-// ContainerMetrics holds the metrics information for a container
-// Note: This is a helper type and not registered as a Kubernetes API type
-type ContainerMetrics struct {
+// PodMetrics holds the metrics information for a pod
+type PodMetrics struct {
 	MaxCPU      MemCpuPair `json:"maxCPUUsage"`
 	MaxMemory   MemCpuPair `json:"maxMemoryUsage"`
 	MemCpuRatio MemCpuPair `json:"maxMemCpuRatio"`
@@ -70,8 +68,7 @@ type ContainerMetrics struct {
 	EMACpu         float64 `json:"emaCPU"`
 }
 
-func (m *ContainerMetrics) MergeMax(other ContainerMetrics) {
-
+func (m *PodMetrics) MergeMax(other PodMetrics) {
 	if other.MemCpuRatio.Ratio() > m.MemCpuRatio.Ratio() {
 		m.MemCpuRatio = other.MemCpuRatio
 	}
@@ -82,18 +79,18 @@ func (m *ContainerMetrics) MergeMax(other ContainerMetrics) {
 		m.MaxCPU.Cpu = other.MaxCPU.Cpu
 	}
 }
-func (m *ContainerMetrics) CalculateEMA(other ContainerMetrics, ratio float64) {
+
+func (m *PodMetrics) CalculateEMA(other PodMetrics, ratio float64) {
 	m.EMACpu = other.EMACpu*ratio + (1.0-ratio)*m.EMACpu
 	m.EMAMemory = other.EMAMemory*ratio + (1.0-ratio)*m.EMAMemory
 	m.EMAMemCPURatio = other.MemCpuRatio.Ratio()*float64(ratio) + (1.0-ratio)*m.EMAMemCPURatio
 }
 
-type ContainerId struct {
-	ContainerName string `json:"containerName"`
-	PodName       string `json:"podName"`
-	Namespace     string `json:"namespace"`
-	ResourceName  string `json:"resourceName"`
-	ResourceType  string `json:"resourceType"`
+type PodId struct {
+	PodName      string `json:"podName"`
+	Namespace    string `json:"namespace"`
+	ResourceName string `json:"resourceName"`
+	ResourceType string `json:"resourceType"`
 }
 
 type MemCpuPair struct {
@@ -105,8 +102,8 @@ func (pair MemCpuPair) Ratio() float64 {
 	return pair.Mem / (pair.Cpu + 0.001) //add 0.001 to avoid divide by 0
 }
 
-// containerUsage stores containers usage
-var ContainerUsage = make(map[ContainerId]ContainerMetrics)
+// PodUsage stores pods usage
+var PodUsage = make(map[PodId]PodMetrics)
 
 // key value slice based on different metrics
 var KvSliceBasedOnMem []IdMetrics

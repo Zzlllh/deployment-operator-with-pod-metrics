@@ -8,9 +8,9 @@ metadata:
   namespace: metrics-dep-operator-system
 spec:
   enable: true
-  memoryThresholdForContainer: 500Mi
-  cpuThresholdForContainer: 10m
+  memoryThresholdForPod: 500Mi
+  cpuThresholdForPod: 10m
   emaRatio: "0.7"
-  displayCount: 30
+  displayCount: 70
   memoryLimitForNode: 55Gi
   cpuLimitForNode: 7

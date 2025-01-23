@@ -143,8 +143,8 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 	}
 
 	// Get current thresholds
-	currentMemoryThreshold := float64(SigDepOperator.Spec.MemoryThresholdForContainer.Value()) / (1024 * 1024 * 1024)
-	currentCPUThreshold := float64(SigDepOperator.Spec.CPUThresholdForContainer.MilliValue()) / 1000
+	currentMemoryThreshold := float64(SigDepOperator.Spec.MemoryThresholdForPod.Value()) / (1024 * 1024 * 1024)
+	currentCPUThreshold := float64(SigDepOperator.Spec.CPUThresholdForPod.MilliValue()) / 1000
 
 	currentEMARatio, err := strconv.ParseFloat(SigDepOperator.Spec.EMARatio, 64)
 	if err != nil {
@@ -164,14 +164,14 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 			"new_cpu_threshold", currentCPUThreshold)
 
 		// Clear existing metrics
-		sigDepOpv1alpha1.ContainerUsage = make(map[sigDepOpv1alpha1.ContainerId]sigDepOpv1alpha1.ContainerMetrics)
+		sigDepOpv1alpha1.PodUsage = make(map[sigDepOpv1alpha1.PodId]sigDepOpv1alpha1.PodMetrics)
 
 		// Update stored thresholds
 		previousMemoryThreshold = currentMemoryThreshold
 		previousCPUThreshold = currentCPUThreshold
 	}
 	// initialize variables on every reconcile
-	podSet := make(map[sigDepOpv1alpha1.ContainerId]struct{})
+	podSet := make(map[sigDepOpv1alpha1.PodId]struct{})
 	sigDepOpv1alpha1.KvSliceBasedOnMem = nil
 	sigDepOpv1alpha1.KvSliceBasedOnRatio = nil
 
@@ -233,13 +233,13 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 		logger.Error(fmt.Errorf("encountered %d errors during processing: %v", len(errs), errs), "errors occurred while processing pods")
 	}
 
-	for key := range sigDepOpv1alpha1.ContainerUsage {
+	for key := range sigDepOpv1alpha1.PodUsage {
 		if _, ok := podSet[key]; !ok {
 			// k not found in mySet
-			delete(sigDepOpv1alpha1.ContainerUsage, key)
+			delete(sigDepOpv1alpha1.PodUsage, key)
 		} else {
-			sigDepOpv1alpha1.KvSliceBasedOnMem = append(sigDepOpv1alpha1.KvSliceBasedOnMem, sigDepOpv1alpha1.IdMetrics{Key: key, Value: sigDepOpv1alpha1.ContainerUsage[key]})
-			sigDepOpv1alpha1.KvSliceBasedOnRatio = append(sigDepOpv1alpha1.KvSliceBasedOnRatio, sigDepOpv1alpha1.IdMetrics{Key: key, Value: sigDepOpv1alpha1.ContainerUsage[key]})
+			sigDepOpv1alpha1.KvSliceBasedOnMem = append(sigDepOpv1alpha1.KvSliceBasedOnMem, sigDepOpv1alpha1.IdMetrics{Key: key, Value: sigDepOpv1alpha1.PodUsage[key]})
+			sigDepOpv1alpha1.KvSliceBasedOnRatio = append(sigDepOpv1alpha1.KvSliceBasedOnRatio, sigDepOpv1alpha1.IdMetrics{Key: key, Value: sigDepOpv1alpha1.PodUsage[key]})
 		}
 	}
 
@@ -249,7 +249,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 	go func() {
 		defer wg.Done()
 		sort.Slice(sigDepOpv1alpha1.KvSliceBasedOnMem, func(i, j int) bool {
-			return sigDepOpv1alpha1.KvSliceBasedOnMem[i].Value.MaxMemory.Mem > sigDepOpv1alpha1.KvSliceBasedOnMem[j].Value.MaxMemory.Mem
+			return sigDepOpv1alpha1.KvSliceBasedOnMem[i].Value.EMAMemCPURatio > sigDepOpv1alpha1.KvSliceBasedOnMem[j].Value.EMAMemCPURatio
 		})
 	}()
 
@@ -268,21 +268,19 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 
 	// Log the high usage containers with clean output
 
-	// for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnMem {
-	// 	if i >= SigDepOperator.Spec.DisplayCount {
-	// 		break
-	// 	}
-	// 	logger.Info("Max memory resource usage",
-	// 		"current rank", i,
-	// 		"name", kvPair.Key.ContainerName,
-	// 		"MemCpuRatio", kvPair.Value.MemCpuRatio.Ratio(),
-	// 		"maxmem_Memory", kvPair.Value.MaxMemory.Mem,
-	// 		"maxmem_Cpu", kvPair.Value.MaxMemory.Cpu,
-	// 		"maxcpu_Memory", kvPair.Value.MaxCPU.Mem,
-	// 		"maxcpu_Cpu", kvPair.Value.MaxCPU.Cpu,
-	// 		"EMA", kvPair.Value.EMAMemCPURatio,
-	// 	)
-	// }
+	for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnMem {
+		if i >= SigDepOperator.Spec.DisplayCount {
+			break
+		}
+		logger.Info("Max avg resource usage",
+			"current rank", i,
+			"name", kvPair.Key.ResourceName,
+			"MemCpuRatio", kvPair.Value.MemCpuRatio.Ratio(),
+			"maxmem_Memory", kvPair.Value.MaxMemory.Mem,
+			"maxcpu_Cpu", kvPair.Value.MaxCPU.Cpu,
+			"EMA", kvPair.Value.EMAMemCPURatio,
+		)
+	}
 	// for i, kvPair := range sigDepOpv1alpha1.KvSliceBasedOnRatio {
 	// 	if i >= SigDepOperator.Spec.DisplayCount {
 	// 		break
@@ -301,7 +299,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 
 	memSum := 0.0
 	cpuSum := 0.0
-	placedPods := []sigDepOpv1alpha1.ContainerId{}
+	placedPods := []sigDepOpv1alpha1.PodId{}
 	seenContainers := make(map[string]struct{}) // for deduplication
 	uniquePodsCount := 0
 
@@ -315,7 +313,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 		uniqueKey := fmt.Sprintf("%s/%s/%s",
 			kvPair.Key.Namespace,
 			kvPair.Key.ResourceName,
-			kvPair.Key.ContainerName)
+			kvPair.Key.PodName)
 
 		// Skip if we've already seen this container
 		if _, exists := seenContainers[uniqueKey]; exists {
@@ -336,7 +334,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 		cpuSum += kvPair.Value.MaxCPU.Cpu
 		logger.Info("Pod composition from ratio",
 			"current rank", i,
-			"container", kvPair.Key.ContainerName,
+			"resource", kvPair.Key.ResourceName,
 			"pod", kvPair.Key.PodName,
 			"memory_GB", kvPair.Value.MaxMemory.Mem,
 			"cpu_cores", kvPair.Value.MaxCPU.Cpu,
@@ -360,7 +358,7 @@ func (r *SigAddDeploymentOperatorReconciler) monitorWorkloadMetrics(ctx context.
 }
 
 // Extract pod processing logic to avoid duplication
-func (r *SigAddDeploymentOperatorReconciler) processPods(ctx context.Context, log logr.Logger, pods []corev1.Pod, podSet map[sigDepOpv1alpha1.ContainerId]struct{}, memoryThreshold, cpuThreshold, emaRatio float64) error {
+func (r *SigAddDeploymentOperatorReconciler) processPods(ctx context.Context, log logr.Logger, pods []corev1.Pod, podSet map[sigDepOpv1alpha1.PodId]struct{}, memoryThreshold, cpuThreshold, emaRatio float64) error {
 	for _, pod := range pods {
 		// Get resource type and name from owner references
 		resourceType, resourceName := "", ""
@@ -407,57 +405,57 @@ func (r *SigAddDeploymentOperatorReconciler) processPods(ctx context.Context, lo
 			continue
 		}
 
-		// Check each container's memory usage
+		// Calculate total pod resource usage
+		var totalMemoryGB, totalCPUCores float64
 		for _, container := range podMetrics.Containers {
 			memoryQuantity := container.Usage.Memory()
 			memoryBytes := float64(memoryQuantity.Value())
-			memoryGB := memoryBytes / (1024 * 1024 * 1024)
+			totalMemoryGB += memoryBytes / (1024 * 1024 * 1024)
 
 			cpuQuantity := container.Usage.Cpu()
-			cpuCores := float64(cpuQuantity.MilliValue()) / 1000.0
+			totalCPUCores += float64(cpuQuantity.MilliValue()) / 1000.0
+		}
 
-			//current Id
-			curId := sigDepOpv1alpha1.ContainerId{
-				ContainerName: container.Name,
-				PodName:       pod.Name,
-				Namespace:     pod.Namespace,
-				ResourceType:  resourceType,
-				ResourceName:  resourceName,
+		//current Pod Id
+		curId := sigDepOpv1alpha1.PodId{
+			PodName:      pod.Name,
+			Namespace:    pod.Namespace,
+			ResourceType: resourceType,
+			ResourceName: resourceName,
+		}
+
+		// Thread-safe podSet update
+		podSetMutex.Lock()
+		podSet[curId] = struct{}{}
+		podSetMutex.Unlock()
+
+		// Check pod's total resource usage against thresholds
+		if totalMemoryGB > memoryThreshold || totalCPUCores > cpuThreshold {
+			podMemCpuPair := sigDepOpv1alpha1.MemCpuPair{
+				Cpu: totalCPUCores,
+				Mem: totalMemoryGB,
+			}
+			ratio := podMemCpuPair.Ratio()
+			//current metrics
+			curMetrics := sigDepOpv1alpha1.PodMetrics{
+				MaxCPU:         podMemCpuPair,
+				MaxMemory:      podMemCpuPair,
+				MemCpuRatio:    podMemCpuPair,
+				EMAMemCPURatio: ratio,
+				EMAMemory:      totalMemoryGB,
+				EMACpu:         totalCPUCores,
 			}
 
-			// Thread-safe podSet update
-			podSetMutex.Lock()
-			podSet[curId] = struct{}{}
-			podSetMutex.Unlock()
-
-			// Check both memory and CPU thresholds
-			if memoryGB > memoryThreshold || cpuCores > cpuThreshold {
-				containerMemCpuPair := sigDepOpv1alpha1.MemCpuPair{
-					Cpu: cpuCores,
-					Mem: memoryGB,
-				}
-				ratio := containerMemCpuPair.Ratio()
-				//current metrics
-				curMetrics := sigDepOpv1alpha1.ContainerMetrics{
-					MaxCPU:         containerMemCpuPair,
-					MaxMemory:      containerMemCpuPair,
-					MemCpuRatio:    containerMemCpuPair,
-					EMAMemCPURatio: ratio,
-					EMAMemory:      memoryGB,
-					EMACpu:         cpuCores,
-				}
-
-				// Thread-safe ContainerUsage update
-				containerUsageMutex.Lock()
-				if storedMetrics, ok := sigDepOpv1alpha1.ContainerUsage[curId]; ok {
-					storedMetrics.MergeMax(curMetrics)
-					storedMetrics.CalculateEMA(curMetrics, emaRatio)
-					sigDepOpv1alpha1.ContainerUsage[curId] = storedMetrics
-				} else {
-					sigDepOpv1alpha1.ContainerUsage[curId] = curMetrics
-				}
-				containerUsageMutex.Unlock()
+			// Thread-safe PodUsage update
+			containerUsageMutex.Lock()
+			if storedMetrics, ok := sigDepOpv1alpha1.PodUsage[curId]; ok {
+				storedMetrics.MergeMax(curMetrics)
+				storedMetrics.CalculateEMA(curMetrics, emaRatio)
+				sigDepOpv1alpha1.PodUsage[curId] = storedMetrics
+			} else {
+				sigDepOpv1alpha1.PodUsage[curId] = curMetrics
 			}
+			containerUsageMutex.Unlock()
 		}
 	}
 	return nil
