@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"time"
+
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -36,6 +38,7 @@ type SigAddDeploymentOperatorSpec struct {
 	// MemoryLimit specifies the memory threshold for pod placement
 	// +kubebuilder:validation:Required
 	MemoryLimitForNode resource.Quantity `json:"memoryLimitForNode"`
+
 	// CPULimit specifies the CPU threshold for pod placement
 	// +kubebuilder:validation:Required
 	CPULimitForNode resource.Quantity `json:"cpuLimitForNode"`
@@ -50,6 +53,9 @@ type SigAddDeploymentOperatorStatus struct {
 	// PlacedPods tracks the pods that have been placed
 	// +optional
 	PlacedPods []PodId `json:"placedPods,omitempty"`
+	// ActivationTime tracks when the operator was enabled
+	// +optional
+	ActivationTime *metav1.Time `json:"activationTime,omitempty"`
 }
 
 type IdMetrics struct {
@@ -59,31 +65,44 @@ type IdMetrics struct {
 
 // PodMetrics holds the metrics information for a pod
 type PodMetrics struct {
-	MaxCPU      MemCpuPair `json:"maxCPUUsage"`
-	MaxMemory   MemCpuPair `json:"maxMemoryUsage"`
-	MemCpuRatio MemCpuPair `json:"maxMemCpuRatio"`
-	//Exponential Moving Average to calculate an approx avg
-	EMAMemCPURatio float64 `json:"emaMCR"` // memory cpu ratio
+	// Using slices instead of fixed-size arrays
+	MaxCPU      []MemCpuPair `json:"maxCPUUsage"`
+	MaxMemory   []MemCpuPair `json:"maxMemoryUsage"`
+	MemCpuRatio []MemCpuPair `json:"maxMemCpuRatio"`
+
+	// Exponential Moving Average fields
+	EMAMemCPURatio float64 `json:"emaMCR"`
 	EMAMemory      float64 `json:"emaMem"`
 	EMACpu         float64 `json:"emaCPU"`
 }
 
+// Helper method to get current hour's index (0-23)
+func getCurrentHourIndex() int {
+	return time.Now().Hour()
+}
+
+// Update MergeMax to handle hourly metrics
 func (m *PodMetrics) MergeMax(other PodMetrics) {
-	if other.MemCpuRatio.Ratio() > m.MemCpuRatio.Ratio() {
-		m.MemCpuRatio = other.MemCpuRatio
+	hour := getCurrentHourIndex()
+
+	if other.MemCpuRatio[hour].Ratio() > m.MemCpuRatio[hour].Ratio() {
+		m.MemCpuRatio[hour] = other.MemCpuRatio[hour]
 	}
-	if other.MaxMemory.Mem > m.MaxMemory.Mem {
-		m.MaxMemory.Mem = other.MaxMemory.Mem
+	if other.MaxMemory[hour].Mem > m.MaxMemory[hour].Mem {
+		m.MaxMemory[hour] = other.MaxMemory[hour]
 	}
-	if other.MaxCPU.Cpu > m.MaxCPU.Cpu {
-		m.MaxCPU.Cpu = other.MaxCPU.Cpu
+	if other.MaxCPU[hour].Cpu > m.MaxCPU[hour].Cpu {
+		m.MaxCPU[hour] = other.MaxCPU[hour]
 	}
 }
 
+// Update CalculateEMA to use current hour's metrics
 func (m *PodMetrics) CalculateEMA(other PodMetrics, ratio float64) {
-	m.EMACpu = other.EMACpu*ratio + (1.0-ratio)*m.EMACpu
-	m.EMAMemory = other.EMAMemory*ratio + (1.0-ratio)*m.EMAMemory
-	m.EMAMemCPURatio = other.MemCpuRatio.Ratio()*float64(ratio) + (1.0-ratio)*m.EMAMemCPURatio
+	hour := getCurrentHourIndex()
+
+	m.EMACpu = other.MaxCPU[hour].Cpu*ratio + (1.0-ratio)*m.EMACpu
+	m.EMAMemory = other.MaxMemory[hour].Mem*ratio + (1.0-ratio)*m.EMAMemory
+	m.EMAMemCPURatio = other.MemCpuRatio[hour].Ratio()*float64(ratio) + (1.0-ratio)*m.EMAMemCPURatio
 }
 
 type PodId struct {
@@ -132,4 +151,14 @@ type SigAddDeploymentOperatorList struct {
 
 func init() {
 	SchemeBuilder.Register(&SigAddDeploymentOperator{}, &SigAddDeploymentOperatorList{})
+}
+
+// NewPodMetrics creates a new PodMetrics instance with initialized slices
+func NewPodMetrics() PodMetrics {
+	return PodMetrics{
+		MaxCPU:      make([]MemCpuPair, 24), // Initialize with 24 zero values
+		MaxMemory:   make([]MemCpuPair, 24), // Initialize with 24 zero values
+		MemCpuRatio: make([]MemCpuPair, 24), // Initialize with 24 zero values
+		// EMA fields will automatically be initialized to 0
+	}
 }

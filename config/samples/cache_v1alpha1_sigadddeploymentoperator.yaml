@@ -8,7 +8,7 @@ metadata:
   namespace: metrics-dep-operator-system
 spec:
   enable: true
-  memoryThresholdForPod: 500Mi
+  memoryThresholdForPod: 10Mi
   cpuThresholdForPod: 10m
   emaRatio: "0.7"
   displayCount: 70

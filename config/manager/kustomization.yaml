@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: 718790045195.dkr.ecr.cn-northwest-1.amazonaws.com.cn/sig-dep-operator
-  newTag: 0.6.22
+  newTag: 0.7.3

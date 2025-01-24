@@ -90,6 +90,10 @@ spec:
             description: SigAddDeploymentOperatorStatus defines the observed state
               of SigAddDeploymentOperator.
             properties:
+              activationTime:
+                description: ActivationTime tracks when the operator was enabled
+                format: date-time
+                type: string
               conditions:
                 description: |-
                   INSERT ADDITIONAL STATUS FIELD - define observed state of cluster

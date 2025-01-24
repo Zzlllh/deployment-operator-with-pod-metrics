@@ -44,7 +44,9 @@ func SetupSigAddDeploymentOperatorWebhookWithManager(mgr ctrl.Manager) error {
 		WithValidator(&SigAddDeploymentOperatorCustomValidator{
 			Client: mgr.GetClient(),
 		}).
-		WithDefaulter(&SigAddDeploymentOperatorCustomDefaulter{}).
+		WithDefaulter(&SigAddDeploymentOperatorCustomDefaulter{
+			Client: mgr.GetClient(),
+		}).
 		Complete()
 }
 
@@ -84,6 +86,7 @@ func SetupWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as it is used only for temporary operations and does not need to be deeply copied.
 // +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cache.sig.com,resources=sigadddeploymentoperators/status,verbs=get;update;patch
 type SigAddDeploymentOperatorCustomDefaulter struct {
 	Client client.Client
 }
@@ -113,7 +116,30 @@ func (r *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, o
 	sigDepOp := &sigDepOpList.Items[0]
 	// Check if operator is enabled
 	if !sigDepOp.Spec.Enable {
+		// Reset the activation time when disabled
+		if sigDepOp.Status.ActivationTime != nil {
+			sigDepOp.Status.ActivationTime = nil
+			if err := r.Client.Status().Update(ctx, sigDepOp); err != nil {
+				log.Error(err, "Failed to reset activation time")
+			}
+		}
 		return nil
+	}
+
+	// Handle activation time logic
+	if sigDepOp.Status.ActivationTime == nil {
+		now := metav1.NewTime(time.Now())
+		sigDepOp.Status.ActivationTime = &now
+		if err := r.Client.Status().Update(ctx, sigDepOp); err != nil {
+			log.Error(err, "Failed to set activation time")
+			return nil
+		}
+		return nil // Skip mutation until activation period is reached
+	}
+
+	// Check if 24 hours have passed since activation
+	if time.Since(sigDepOp.Status.ActivationTime.Time) < 24*time.Hour {
+		return nil // Skip mutation until 24 hours have passed
 	}
 
 	// Get the resource being mutated
