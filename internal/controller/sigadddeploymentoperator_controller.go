@@ -102,7 +102,24 @@ func (r *SigAddDeploymentOperatorReconciler) Reconcile(ctx context.Context, req 
 
 	if !SigDepOperator.Spec.Enable {
 		log.Info("Operator is disabled, skipping reconciliation")
+		if SigDepOperator.Status.ActivationTime != nil {
+			SigDepOperator.Status.ActivationTime = nil
+			if err := r.Status().Update(ctx, SigDepOperator); err != nil {
+				log.Error(err, "Failed to set activation time")
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, nil
+	}
+
+	// Set activation time if it's not already set
+	if SigDepOperator.Status.ActivationTime == nil {
+		now := metav1.NewTime(time.Now())
+		SigDepOperator.Status.ActivationTime = &now
+		if err := r.Status().Update(ctx, SigDepOperator); err != nil {
+			log.Error(err, "Failed to set activation time")
+			return ctrl.Result{}, err
+		}
 	}
 
 	if err := r.monitorWorkloadMetrics(ctx, log, SigDepOperator); err != nil {

@@ -116,25 +116,7 @@ func (r *SigAddDeploymentOperatorCustomDefaulter) Default(ctx context.Context, o
 	sigDepOp := &sigDepOpList.Items[0]
 	// Check if operator is enabled
 	if !sigDepOp.Spec.Enable {
-		// Reset the activation time when disabled
-		if sigDepOp.Status.ActivationTime != nil {
-			sigDepOp.Status.ActivationTime = nil
-			if err := r.Client.Status().Update(ctx, sigDepOp); err != nil {
-				log.Error(err, "Failed to reset activation time")
-			}
-		}
 		return nil
-	}
-
-	// Handle activation time logic
-	if sigDepOp.Status.ActivationTime == nil {
-		now := metav1.NewTime(time.Now())
-		sigDepOp.Status.ActivationTime = &now
-		if err := r.Client.Status().Update(ctx, sigDepOp); err != nil {
-			log.Error(err, "Failed to set activation time")
-			return nil
-		}
-		return nil // Skip mutation until activation period is reached
 	}
 
 	// Check if 24 hours have passed since activation
